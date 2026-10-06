@@ -29,5 +29,8 @@ export function plannedActions(config: RunConfig, appPort: number): string[] {
   ];
   if (Object.keys(config.env ?? {}).length) actions.push('Store env vars as SSM SecureString parameters');
   actions.push(`Run container 'app' on port ${appPort}`);
+  actions.push(existingSecurityGroupId
+    ? `If the health check finds the app listening on a different port, the run stops and asks you to open it on ${existingSecurityGroupId} (your group is not changed further)`
+    : 'If the health check finds the app listening on a different port, add an inbound rule for that port from 0.0.0.0/0 to the new security group and redeploy');
   return actions;
 }

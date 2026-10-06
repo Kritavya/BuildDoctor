@@ -67,6 +67,20 @@ export async function revokeTagged(
   return perms.reduce((n, p) => n + (p.IpRanges?.length ?? 0), 0);
 }
 
+// Opens the app port when missing, but only on a security group this run created. A pre-existing
+// group was approved for one port; changing it again needs a new run. Returns an error message or undefined.
+export async function ensureAppPort(run: RunState, port: number, log: (l: string) => void): Promise<string | undefined> {
+  const sgId = run.outputs.securityGroupId;
+  if (!sgId || portOpenToWorld(await describeSg(run.config.aws.region, sgId), port)) return undefined;
+  if (!wasCreated(run, 'sg', sgId)) {
+    return `Your security group ${sgId} does not allow inbound tcp/${port}, and BuildDoctor will not change a pre-existing group beyond what you approved. ` +
+      `Open tcp/${port} on ${sgId} yourself, or set the app port to ${port} and start a new run.`;
+  }
+  log(`Opening tcp/${port} on ${sgId}`);
+  await authorizePorts(run.config.aws.region, sgId, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
+  return undefined;
+}
+
 export function inboundPorts(run: RunState): { ports: number[]; dropped: number[] } {
   const all = [appPort(run), ...(run.config.aws.openPorts ?? [])];
   // SSH is never opened: the instance is managed through SSM.

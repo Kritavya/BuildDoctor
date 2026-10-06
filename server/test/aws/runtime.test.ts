@@ -57,10 +57,21 @@ describe('deploy step', () => {
     ssm.on(PutParameterCommand).resolves({});
     commandReturns('ok');
     const run = deployedRun();
+    run.outputs.created.push({ type: 'sg', id: 'sg-1' });
     run.config.appPort = 8080;
     expect((await step('deploy').run(makeCtx(run))).ok).toBe(true);
     expect(ec2).toHaveReceivedCommandWith(AuthorizeSecurityGroupIngressCommand, { GroupId: 'sg-1', IpPermissions: [expect.objectContaining({ FromPort: 8080, ToPort: 8080 })] });
     expect(ssm.commandCalls(SendCommandCommand)[0].args[0].input.Parameters!.commands[0]).toContain('-p 8080:8080');
+  });
+
+  it('refuses to change a pre-existing security group for a remapped port', async () => {
+    const run = deployedRun();
+    run.config.appPort = 8080;
+    const res = await step('deploy').run(makeCtx(run));
+    expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/pre-existing group/) });
+    expect(res).not.toHaveProperty('retryFrom');
+    expect(ec2).not.toHaveReceivedCommand(AuthorizeSecurityGroupIngressCommand);
+    expect(ssm).not.toHaveReceivedCommand(SendCommandCommand);
   });
 
   it('leaves an already-open port alone', async () => {
@@ -119,9 +130,18 @@ describe('health step', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(Object.assign(new Error('fetch failed'), { cause: { code: 'ETIMEDOUT' } })));
     ec2.on(DescribeSecurityGroupsCommand).resolves({ SecurityGroups: [{ GroupId: 'sg-1', IpPermissions: [] }] });
     ec2.on(AuthorizeSecurityGroupIngressCommand).resolves({});
-    const res = await step('health').run(makeCtx(deployedRun()));
+    const run = deployedRun();
+    run.outputs.created.push({ type: 'sg', id: 'sg-1' });
+    const res = await step('health').run(makeCtx(run));
     expect(res).toMatchObject({ ok: false, retryFrom: 'deploy', diagnosis: { rootCause: expect.stringContaining('blocked') } });
     expect(chatJson).not.toHaveBeenCalled();
+
+    // A pre-existing group is never modified: clear message, no retry.
+    ec2.resetHistory();
+    const res2 = await step('health').run(makeCtx(deployedRun()));
+    expect(res2).toMatchObject({ ok: false, diagnosis: { nextStep: expect.stringContaining('Open tcp/3000 on sg-1') } });
+    expect(res2).not.toHaveProperty('retryFrom');
+    expect(ec2).not.toHaveReceivedCommand(AuthorizeSecurityGroupIngressCommand);
   });
 
   it('asks the LLM with redacted evidence; a missing env var stops with "please provide" instead of retrying', async () => {

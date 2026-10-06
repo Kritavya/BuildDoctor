@@ -3,7 +3,7 @@ import type { Step, StepContext } from '../pipeline/step.js';
 import type { RunState } from '../types.js';
 import { clients } from './clients.js';
 import { runShell } from './ssm.js';
-import { authorizePorts, describeSg, portOpenToWorld } from './network.js';
+import { ensureAppPort } from './network.js';
 import { appPort, errMsg, errName, shellQuote, tags } from './util.js';
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -89,10 +89,10 @@ export const deployStep: Step = {
     const port = appPort(run);
     try {
       // A doctor-loop port remap can change the port after the security group step ran.
-      const sgId = run.outputs.securityGroupId;
-      if (sgId && !portOpenToWorld(await describeSg(run.config.aws.region, sgId), port)) {
-        ctx.log(`Opening tcp/${port} on ${sgId}`);
-        await authorizePorts(run.config.aws.region, sgId, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
+      const blocked = await ensureAppPort(run, port, ctx.log);
+      if (blocked) {
+        return { ok: false, summary: `Port ${port} not allowed on your security group`, error: blocked,
+          diagnosis: { rootCause: blocked, evidence: `No inbound rule for tcp/${port}`, attemptedFix: 'none', result: 'not-fixed', nextStep: `Open tcp/${port} on your security group, then start a new run.` } };
       }
       const { stored, empty } = await storeEnv(run);
       if (stored.length) ctx.log(`Stored ${stored.length} env var(s) as SSM SecureStrings: ${stored.join(', ')}`);

@@ -2,7 +2,7 @@ import type { Step, StepContext } from '../pipeline/step.js';
 import type { Diagnosis } from '../types.js';
 import { chatJson } from '../llm/ollama.js';
 import { runShell } from './ssm.js';
-import { authorizePorts, describeSg, portOpenToWorld } from './network.js';
+import { describeSg, ensureAppPort, portOpenToWorld } from './network.js';
 import { appPort, errMsg, redact, sleep, timing } from './util.js';
 
 type Probe = { ok: true; status: number } | { ok: false; detail: string };
@@ -93,8 +93,11 @@ export const healthStep: Step = {
       try {
         const sg = await describeSg(region, securityGroupId);
         if (!portOpenToWorld(sg, port)) {
-          ctx.log(`Security group ${securityGroupId} does not allow tcp/${port}; adding it`);
-          await authorizePorts(region, securityGroupId, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
+          const blocked = await ensureAppPort(run, port, ctx.log);
+          if (blocked) {
+            return { ok: false, summary: 'Port blocked by your security group', error: blocked,
+              diagnosis: { rootCause: blocked, evidence: `No ingress rule covering port ${port} from 0.0.0.0/0`, attemptedFix: 'none', result: 'not-fixed', nextStep: `Open tcp/${port} on ${securityGroupId}, then start a new run.` } };
+          }
           const diagnosis: Diagnosis = {
             rootCause: `Security group ${securityGroupId} blocked inbound tcp/${port}`,
             evidence: `No ingress rule covering port ${port} from 0.0.0.0/0`,

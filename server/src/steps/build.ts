@@ -1,9 +1,9 @@
-// docker build via the Engine API, native arch (arm64 here, matching the t4g deploy target).
+// docker build via the Engine API, pinned to linux/arm64 to match the t4g (Graviton) deploy target.
 import os from 'node:os';
 import type { Step } from '../pipeline/step.js';
 import { diagnose, docker, imageTag, scrub, tailLines, walk } from './common.js';
 
-const platform = () => `linux/${os.arch() === 'arm64' ? 'arm64' : 'amd64'}`;
+export const PLATFORM = 'linux/arm64';
 
 export const build: Step = {
   id: 'build',
@@ -16,11 +16,12 @@ export const build: Step = {
       lines.push(line);
       ctx.log(line);
     };
+    if (os.arch() !== 'arm64') push(`warning: host is ${os.arch()}; building ${PLATFORM} under emulation (slower; needs QEMU/binfmt)`);
     const started = Date.now();
     let error: string | undefined;
     try {
       const src = await walk(ctx.workdir, 50_000, new Set(['.git']));
-      const stream = await docker.buildImage({ context: ctx.workdir, src }, { t: tag, platform: platform(), rm: true, forcerm: true, abortSignal: ctx.signal });
+      const stream = await docker.buildImage({ context: ctx.workdir, src }, { t: tag, platform: PLATFORM, rm: true, forcerm: true, abortSignal: ctx.signal });
       await new Promise<void>((resolve, reject) => {
         docker.modem.followProgress(
           stream,

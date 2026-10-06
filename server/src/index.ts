@@ -5,7 +5,8 @@ import express, { type Request, type Response } from 'express';
 import { awsSteps, plannedActions, setDashboard, teardown } from './aws/steps.js';
 import { appPort } from './aws/util.js';
 import { MODEL, ollamaReady } from './llm/ollama.js';
-import { Engine } from './pipeline/engine.js';
+import { Engine, WORKSPACES } from './pipeline/engine.js';
+import path from 'node:path';
 import { RunStore } from './pipeline/store.js';
 import { docker, imageTag } from './steps/common.js';
 import { localSteps } from './steps/index.js';
@@ -94,6 +95,7 @@ export function createApp(
     try {
       const deleted = await teardown(run);
       run.status = 'torn-down';
+      store.touch(run.id);
       for (const line of deleted) store.nodeLog(run.id, 'dashboard', `teardown: ${line}`);
       res.json({ deleted });
     } catch (err) {
@@ -158,5 +160,7 @@ function message(err: unknown): string {
 
 if (!process.env.VITEST) {
   const port = Number(process.env.PORT ?? 4000);
-  createApp().listen(port, () => console.log(`BuildDoctor server on :${port}`));
+  const store = new RunStore(path.join(WORKSPACES, 'runs'));
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { store.flush(); process.exit(0); });
+  createApp(store).listen(port, () => console.log(`BuildDoctor server on :${port}`));
 }
