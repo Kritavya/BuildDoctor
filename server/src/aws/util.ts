@@ -49,7 +49,12 @@ export function errName(e: unknown): string {
 }
 
 export function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  const msg = e instanceof Error ? e.message : String(e);
+  const name = (e as { name?: string } | undefined)?.name ?? '';
+  if (/AccessDenied|UnauthorizedOperation/.test(name) || /not authorized to perform/.test(msg)) {
+    return `AWS refused this action: the deploy user is missing permissions. Attach docs/iam/deploy-user-policy.json to it, then run again. (${msg})`;
+  }
+  return msg;
 }
 
 export function tags(runId: string, name?: string) {

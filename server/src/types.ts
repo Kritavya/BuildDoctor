@@ -117,4 +117,4 @@ export interface RunState {
 //   POST /api/runs/:id/approve          body { approved: boolean }
 //   POST /api/runs/:id/dashboard        body { enabled: boolean } -> DeployOutputs['dashboard']
 //   POST /api/runs/:id/teardown                                -> { deleted: string[] }
-//   GET  /api/health/local                                     -> { docker: boolean, ollama: boolean, model: string, awsAccount?: string }
+//   GET  /api/health/local                                     -> { docker, ollama, model, awsAccount?, awsPermissions?: { ok, missing[] } }

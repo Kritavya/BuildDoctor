@@ -83,9 +83,12 @@ export function TopBar({ health, phase, repo, mock, formOpen, onToggleForm }: {
             <Pill ok={health.data.ollama} icon={<Cpu size={13} />} label="Local model (Ollama)"
               value={health.data.ollama ? health.data.model : 'Not running'}
               title={health.data.ollama ? `Using ${health.data.model}` : 'Run "ollama serve" to enable Dockerfile drafting'} />
-            <Pill ok={!!health.data.awsAccount} icon={<Cloud size={13} />} label="AWS"
-              value={health.data.awsAccount ?? 'No credentials'}
-              title={health.data.awsAccount ? `Account ${health.data.awsAccount}` : 'Configure AWS credentials to deploy'} />
+            <Pill ok={!!health.data.awsAccount && health.data.awsPermissions?.ok !== false} icon={<Cloud size={13} />} label="AWS"
+              value={!health.data.awsAccount ? 'No credentials' : health.data.awsPermissions?.ok === false ? 'Permissions missing' : health.data.awsAccount}
+              title={!health.data.awsAccount ? 'Configure AWS credentials to deploy'
+                : health.data.awsPermissions?.ok === false
+                  ? `Account ${health.data.awsAccount}: attach docs/iam/deploy-user-policy.json to the deploy user (denied: ${health.data.awsPermissions.missing.join(', ')})`
+                  : `Account ${health.data.awsAccount}`} />
           </>
         )}
       </div>

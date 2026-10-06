@@ -1,4 +1,6 @@
 // HTTP API for the web UI (routes listed at the bottom of types.ts).
+import { DescribeRepositoriesCommand, ECRClient } from '@aws-sdk/client-ecr';
+import { GetRoleCommand, IAMClient } from '@aws-sdk/client-iam';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
@@ -109,7 +111,8 @@ export function createApp(
       ollamaReady(),
       callerAccount(),
     ]);
-    res.json({ docker: dockerOk, ollama, model: MODEL, awsAccount });
+    const awsPermissions = awsAccount ? await deployPermissions() : undefined;
+    res.json({ docker: dockerOk, ollama, model: MODEL, awsAccount, awsPermissions });
   });
 
   return app;
@@ -123,6 +126,27 @@ async function callerAccount(): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+// Probes two actions from the deploy policy. "Not found" means allowed; AccessDenied means the policy isn't attached.
+async function deployPermissions(): Promise<{ ok: boolean; missing: string[] }> {
+  const region = process.env.AWS_REGION ?? 'us-east-1';
+  const probes: Array<[string, () => Promise<unknown>]> = [
+    ['ecr:DescribeRepositories', () => new ECRClient({ region, profile: process.env.AWS_PROFILE })
+      .send(new DescribeRepositoriesCommand({ repositoryNames: ['builddoctor/permission-probe'] }), { abortSignal: AbortSignal.timeout(5000) })],
+    ['iam:GetRole', () => new IAMClient({ region, profile: process.env.AWS_PROFILE })
+      .send(new GetRoleCommand({ RoleName: 'BuildDoctorEC2Role' }), { abortSignal: AbortSignal.timeout(5000) })],
+  ];
+  const missing: string[] = [];
+  await Promise.all(probes.map(async ([action, call]) => {
+    try {
+      await call();
+    } catch (e) {
+      const name = (e as { name?: string }).name ?? '';
+      if (/AccessDenied|Unauthorized/.test(name)) missing.push(action);
+    }
+  }));
+  return { ok: missing.length === 0, missing };
 }
 
 function validateConfig(b: unknown): string | undefined {

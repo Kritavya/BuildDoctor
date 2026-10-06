@@ -221,6 +221,7 @@ export default function App() {
 
       {showApproval && run.approval && (
         <ApprovalModal request={run.approval} size={form.instanceType} busy={approving}
+          missingPermissions={health.status === 'ok' ? health.data.awsPermissions?.missing : undefined}
           onApprove={() => void respond(true)} onCancel={() => void respond(false)} onDismiss={() => setApprovalHidden(true)} />
       )}
       {teardownOpen && <TeardownDialog busy={tearing} resources={created} envVars={Object.keys(toRunConfig(form).env ?? {}).length} onConfirm={() => void teardown()} onClose={() => setTeardownOpen(false)} />}

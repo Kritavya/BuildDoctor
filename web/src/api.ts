@@ -6,6 +6,8 @@ export interface LocalHealth {
   ollama: boolean
   model: string
   awsAccount?: string
+  /** Probe of the deploy policy; missing lists denied actions. */
+  awsPermissions?: { ok: boolean; missing: string[] }
 }
 
 export interface Backend {

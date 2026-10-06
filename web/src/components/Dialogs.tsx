@@ -36,8 +36,9 @@ function actionIcon(a: string) {
   return <KeyRound size={15} />
 }
 
-export function ApprovalModal({ request, size, busy, onApprove, onCancel, onDismiss }: {
+export function ApprovalModal({ request, size, busy, missingPermissions, onApprove, onCancel, onDismiss }: {
   request: ApprovalRequest
+  missingPermissions?: string[]
   size: InstanceSize
   busy: boolean
   onApprove: () => void
@@ -45,6 +46,7 @@ export function ApprovalModal({ request, size, busy, onApprove, onCancel, onDism
   onDismiss: () => void
 }) {
   const price = INSTANCE_SIZES.find((s) => s.id === size)?.monthly
+  const blocked = !!missingPermissions?.length
   return (
     <Modal onClose={onDismiss} labelledBy="approve-title">
       <div className="modal-head">
@@ -63,9 +65,15 @@ export function ApprovalModal({ request, size, busy, onApprove, onCancel, onDism
         {price ? <>Estimated cost about <strong>${price} a month</strong> while it runs. </> : null}
         You can remove everything with one click once the app is live.
       </p>
+      {blocked && (
+        <p className="modal-warn" role="alert">
+          Your AWS user can't make these changes yet ({missingPermissions!.join(', ')} denied).
+          Attach <code>docs/iam/deploy-user-policy.json</code> to it in the IAM console, then run again.
+        </p>
+      )}
       <div className="modal-actions">
         <button type="button" className="btn btn--ghost" onClick={onCancel} disabled={busy}>Cancel run</button>
-        <button type="button" className="btn btn--primary" onClick={onApprove} disabled={busy} data-autofocus>
+        <button type="button" className="btn btn--primary" onClick={onApprove} disabled={busy || blocked} data-autofocus>
           {busy && <LoaderCircle size={15} className="spin" />} Approve and deploy
         </button>
       </div>

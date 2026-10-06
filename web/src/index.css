@@ -2142,6 +2142,16 @@ button.chip:hover {
   font-size: 13px;
   color: var(--ink-2);
 }
+.modal-warn {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--danger);
+  background: var(--danger-ghost);
+  border-radius: 8px;
+}
+.modal-warn code { font-size: 12px; }
 .modal-actions {
   display: flex;
   justify-content: flex-end;
