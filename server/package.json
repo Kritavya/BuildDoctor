@@ -1,0 +1,31 @@
+{
+  "name": "@builddoctor/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1146.0",
+    "@aws-sdk/client-ecr": "^3.1146.0",
+    "@aws-sdk/client-iam": "^3.1146.0",
+    "@aws-sdk/client-ssm": "^3.1146.0",
+    "@aws-sdk/credential-providers": "^3.1146.0",
+    "cors": "^2.8.6",
+    "dockerode": "^5.0.1",
+    "express": "^5.2.1",
+    "nanoid": "^6.0.2",
+    "simple-git": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/dockerode": "^4.0.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
