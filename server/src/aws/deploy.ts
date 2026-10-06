@@ -3,6 +3,7 @@ import type { Step, StepContext } from '../pipeline/step.js';
 import type { RunState } from '../types.js';
 import { clients } from './clients.js';
 import { runShell } from './ssm.js';
+import { authorizePorts, describeSg, portOpenToWorld } from './network.js';
 import { appPort, errMsg, errName, shellQuote, tags } from './util.js';
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -87,6 +88,12 @@ export const deployStep: Step = {
     if (!instanceId || !imageUri) return { ok: false, summary: 'Nothing to deploy', error: 'Missing instanceId or imageUri from earlier steps' };
     const port = appPort(run);
     try {
+      // A doctor-loop port remap can change the port after the security group step ran.
+      const sgId = run.outputs.securityGroupId;
+      if (sgId && !portOpenToWorld(await describeSg(run.config.aws.region, sgId), port)) {
+        ctx.log(`Opening tcp/${port} on ${sgId}`);
+        await authorizePorts(run.config.aws.region, sgId, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
+      }
       const { stored, empty } = await storeEnv(run);
       if (stored.length) ctx.log(`Stored ${stored.length} env var(s) as SSM SecureStrings: ${stored.join(', ')}`);
       const script = deployScript({ region: run.config.aws.region, imageUri, port, runId: run.id, envNames: stored, emptyEnv: empty });

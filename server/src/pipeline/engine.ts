@@ -1,7 +1,8 @@
 // Runs the pipeline for a run: node ordering, doctor-loop retries and the approval gate.
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PIPELINE, type ApprovalRequest, type Diagnosis, type NodeId, type RunState } from '../types.js';
+import { PIPELINE, type ApprovalRequest, type ConfigPatch, type Diagnosis, type NodeId, type RunState } from '../types.js';
 import type { Step, StepContext } from './step.js';
 import type { RunStore } from './store.js';
 
@@ -24,21 +25,26 @@ export interface EngineOptions {
   workspaceRoot?: string;
   // Exact AWS plan shown at the approval gate; defaults to approvalRequest() derived from config.
   planApproval?: (run: RunState) => ApprovalRequest;
+  // Extra per-run cleanup once the pipeline ends (e.g. local images). Errors are ignored.
+  cleanup?: (run: RunState) => Promise<void>;
 }
 
 export class Engine {
   private steps: Map<NodeId, Step>;
   private approvals = new Map<string, (approved: boolean) => void>();
   private aborts = new Map<string, AbortController>();
+  private running = new Map<string, Promise<void>>();
   private nodes: NodeId[];
   private root: string;
   private plan: (run: RunState) => ApprovalRequest;
+  private cleanup?: (run: RunState) => Promise<void>;
 
   constructor(private store: RunStore, steps: Step[], opts: EngineOptions = {}) {
     this.steps = new Map(steps.map((s) => [s.id, s]));
     this.nodes = PIPELINE.filter((n) => !opts.nodes || opts.nodes.includes(n));
     this.root = opts.workspaceRoot ?? WORKSPACES;
     this.plan = opts.planApproval ?? approvalRequest;
+    this.cleanup = opts.cleanup;
   }
 
   workdir(runId: string): string {
@@ -53,12 +59,21 @@ export class Engine {
     return true;
   }
 
-  cancel(runId: string): void {
+  // Aborts the run and resolves once its pipeline has fully stopped, so callers (teardown)
+  // see every resource a step created before the abort landed.
+  cancel(runId: string): Promise<void> {
     this.aborts.get(runId)?.abort();
     this.approve(runId, false);
+    return this.running.get(runId) ?? Promise.resolve();
   }
 
-  async start(run: RunState): Promise<void> {
+  start(run: RunState): Promise<void> {
+    const p = this.execute(run).finally(() => this.running.delete(run.id));
+    this.running.set(run.id, p);
+    return p;
+  }
+
+  private async execute(run: RunState): Promise<void> {
     const ac = new AbortController();
     this.aborts.set(run.id, ac);
     try {
@@ -72,6 +87,8 @@ export class Engine {
       });
     } finally {
       this.aborts.delete(run.id);
+      await rm(path.join(this.root, run.id), { recursive: true, force: true }).catch(() => {});
+      await this.cleanup?.(run).catch(() => {});
     }
   }
 
@@ -155,11 +172,21 @@ export class Engine {
         return this.finish(run, 'failed', final);
       }
 
+      let patch: ConfigPatch | undefined;
+      if (result.patch !== undefined) {
+        const p = applyPatch(run, result.patch);
+        if ('rejected' in p) {
+          return this.finish(run, 'failed', { ...diagnosis, result: 'not-fixed', nextStep: `Proposed config change rejected (${p.rejected}); fix manually and re-run.` });
+        }
+        patch = p.applied;
+        this.store.nodeLog(run.id, node, `applying config patch before retry: ${JSON.stringify(patch)}`);
+      }
+
       loops.set(to, used + 1);
       const failure: Failure = { node, error: result.error, diagnosis, attempt: used + 1 };
       state.pending = failure;
       state.history.push(failure);
-      emit({ type: 'retry', from: node, to, attempt: used + 1, diagnosis });
+      emit({ type: 'retry', from: node, to, attempt: used + 1, diagnosis, ...(patch ? { patch } : {}) });
       i = target;
     }
 
@@ -187,6 +214,12 @@ export class Engine {
   }
 
   private finish(run: RunState, status: 'live' | 'failed', diagnosis?: Diagnosis): void {
+    // Every node ends in a terminal state: never-reached nodes are skipped, interrupted ones failed.
+    for (const n of PIPELINE) {
+      const s = run.nodes[n].status;
+      if (s === 'idle') this.store.emit(run.id, { type: 'node', node: n, status: 'skipped' });
+      else if (s === 'running' || s === 'waiting') this.store.emit(run.id, { type: 'node', node: n, status: 'failed' });
+    }
     run.status = status;
     this.store.emit(run.id, { type: 'done', status, appUrl: status === 'live' ? run.outputs.appUrl : undefined, diagnosis });
   }
@@ -210,6 +243,23 @@ export function approvalRequest(run: RunState): ApprovalRequest {
     `Run the container on the instance via SSM${port ? `, publishing port ${port}` : ''}${env && Object.keys(env).length ? ` with ${Object.keys(env).length} env var(s): ${Object.keys(env).join(', ')} (values hidden)` : ''}`,
   ];
   return { actions };
+}
+
+const PATCH_KEYS = new Set(['appPort']);
+
+// Validates a step's config patch against the whitelist and applies it to run.config.
+// Rejects unknown keys (including env), invalid ports, SSH, and no-op changes.
+export function applyPatch(run: RunState, patch: unknown): { applied: ConfigPatch } | { rejected: string } {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { rejected: 'not an object' };
+  const bad = Object.keys(patch).filter((k) => !PATCH_KEYS.has(k));
+  if (bad.length) return { rejected: `keys not allowed: ${bad.join(', ')}` };
+  const { appPort } = patch as ConfigPatch;
+  const current = run.config.appPort ?? run.analysis?.port;
+  if (appPort === undefined) return { rejected: 'empty patch' };
+  if (!Number.isInteger(appPort) || appPort < 1 || appPort > 65535 || appPort === 22) return { rejected: `invalid appPort ${String(appPort)}` };
+  if (appPort === current) return { rejected: `appPort is already ${appPort}` };
+  run.config = { ...run.config, appPort };
+  return { applied: { appPort } };
 }
 
 function cancelled(): Diagnosis {

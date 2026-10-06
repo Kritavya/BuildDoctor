@@ -34,12 +34,37 @@ export async function checkHttp(ctx: StepContext, url: string): Promise<Probe> {
 
 interface LlmDiagnosis extends Diagnosis {
   fixLevel?: 'runtime-config' | 'code' | 'infrastructure' | 'unknown';
+  listenPort?: number | string | null;
+  missingEnv?: unknown;
+}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const IGNORED_ENV = new Set(['PORT', 'NODE_ENV']);
+
+// Env var names the evidence shows are required but were not provided. Names only: a model can
+// flag a missing variable, never supply its value. Each name must appear in the evidence or in the
+// names the code was seen to read, so a hallucinated name is dropped.
+export function missingEnvNames(suggested: unknown, evidence: string, provided: Record<string, string> | undefined, known: string[]): string[] {
+  const names = Array.isArray(suggested) ? suggested.filter((n): n is string => typeof n === 'string') : [];
+  return [...new Set(names)]
+    .filter((n) => ENV_NAME.test(n) && !IGNORED_ENV.has(n) && !(provided && n in provided))
+    .filter((n) => known.includes(n) || new RegExp(`\\b${n}\\b`).test(evidence))
+    .sort();
+}
+
+// The port the app really listens on, if the model found one in the evidence and it differs.
+export function remappedPort(suggested: unknown, evidence: string, current: number): number | undefined {
+  const p = Number(suggested);
+  if (!Number.isInteger(p) || p < 1 || p > 65535 || p === 22 || p === current) return undefined;
+  return new RegExp(`(^|[^0-9A-Za-z])${p}([^0-9A-Za-z]|$)`).test(evidence) ? p : undefined;
 }
 
 const SYSTEM = `You are a DevOps engineer diagnosing why a freshly deployed Docker container on AWS EC2 does not answer HTTP.
 Reply with JSON only: {"rootCause": string, "evidence": string (quote the decisive log lines), "attemptedFix": string (the concrete fix to apply),
-"result": "not-fixed", "nextStep": string, "fixLevel": "runtime-config" | "code" | "infrastructure" | "unknown"}.
-fixLevel "runtime-config" means redeploying the same image with different runtime settings (env vars, port mapping, restart) fixes it.
+"result": "not-fixed", "nextStep": string, "fixLevel": "runtime-config" | "code" | "infrastructure" | "unknown",
+"listenPort": number|null (the port the app inside the container actually listens on, only if the logs show it),
+"missingEnv": [string] (names of required environment variables the logs show are missing; names only)}.
+fixLevel "runtime-config" means redeploying the same image with different runtime settings (env vars, port mapping) fixes it.
 "code" means the Dockerfile or application must change. "infrastructure" means AWS networking or instance capacity.`;
 
 export const healthStep: Step = {
@@ -119,7 +144,7 @@ export const healthStep: Step = {
       };
       ctx.log(`LLM diagnosis failed: ${errMsg(e)}`);
     }
-    const { fixLevel, ...rest } = diagnosis;
+    const { fixLevel, listenPort, missingEnv, ...rest } = diagnosis;
     const clean: Diagnosis = {
       rootCause: redact(String(rest.rootCause ?? 'unknown'), env),
       evidence: redact(String(rest.evidence ?? ''), env),
@@ -128,12 +153,38 @@ export const healthStep: Step = {
       nextStep: rest.nextStep ? redact(String(rest.nextStep), env) : undefined,
     };
     ctx.log(`Diagnosis (${fixLevel ?? 'unknown'}): ${clean.rootCause}`);
-    return {
-      ok: false,
-      summary: `Unhealthy: ${clean.rootCause}`.slice(0, 200),
-      error: `${url} -> ${result.detail}`,
-      diagnosis: clean,
-      ...(fixLevel === 'runtime-config' ? { retryFrom: 'deploy' as const } : {}),
-    };
+    const error = `${url} -> ${result.detail}`;
+
+    // Missing env: only the user can supply the value, so stop and ask instead of retrying.
+    const missing = missingEnvNames(missingEnv, evidence, env, run.analysis?.envVars ?? []);
+    if (missing.length) {
+      const list = missing.join(', ');
+      return {
+        ok: false,
+        summary: `Missing env var(s): ${list}`,
+        error,
+        diagnosis: {
+          ...clean,
+          rootCause: `The app needs environment variable(s) that were not provided: ${list}`,
+          attemptedFix: 'none (BuildDoctor never invents env values)',
+          nextStep: `Please provide ${list} in the run's environment variables and start a new run.`,
+        },
+      };
+    }
+
+    // Port remap: redeploying with the same config would fail the same way, so retry only with a patch.
+    const newPort = fixLevel === 'runtime-config' ? remappedPort(listenPort, evidence, port) : undefined;
+    if (newPort) {
+      ctx.log(`App appears to listen on ${newPort}, not ${port}; redeploying with port ${newPort}`);
+      return {
+        ok: false,
+        summary: `App listens on ${newPort}, not ${port}`,
+        error,
+        retryFrom: 'deploy',
+        patch: { appPort: newPort },
+        diagnosis: { ...clean, attemptedFix: `Remap the container port from ${port} to ${newPort} and redeploy` },
+      };
+    }
+    return { ok: false, summary: `Unhealthy: ${clean.rootCause}`.slice(0, 200), error, diagnosis: clean };
   },
 };

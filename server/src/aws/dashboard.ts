@@ -63,7 +63,8 @@ export async function setDashboard(run: RunState, enabled: boolean): Promise<Dep
 export const dashboardStep: Step = {
   id: 'dashboard',
   async run(ctx) {
-    ctx.run.outputs.dashboard = { enabled: false };
+    // Keep a state already set through the API while the pipeline was still running.
+    ctx.run.outputs.dashboard ??= { enabled: false };
     ctx.log(`Monitoring dashboard (cAdvisor metrics :${DASHBOARD_PORTS.metrics}, Dozzle logs :${DASHBOARD_PORTS.logs}) is available but off.`);
     ctx.log('Enabling it opens those ports to your current public IP only.');
     return {

@@ -49,6 +49,12 @@ export interface RunConfig {
   maxFixAttempts?: number;      // doctor loop retries, default 3
 }
 
+// Runtime-config change the doctor loop may apply before a retry. Whitelisted: only the container
+// port can be remapped. Env values are never patched; a missing env var fails with "please provide X".
+export interface ConfigPatch {
+  appPort?: number;
+}
+
 export interface AnalysisResult {
   runtime: 'node' | 'python' | 'go' | 'unknown';
   framework?: string;           // express, next, fastapi, django, flask...
@@ -89,7 +95,7 @@ export type RunEvent =
   | { type: 'node'; node: NodeId; status: NodeStatus; summary?: string; attempt?: number }
   | { type: 'log'; node: NodeId; line: string; ts: number }
   | { type: 'output'; node: NodeId; data: unknown }          // shown in the node's side panel
-  | { type: 'retry'; from: NodeId; to: NodeId; attempt: number; diagnosis: Diagnosis }
+  | { type: 'retry'; from: NodeId; to: NodeId; attempt: number; diagnosis: Diagnosis; patch?: ConfigPatch }
   | { type: 'approval'; request: ApprovalRequest }           // pipeline pauses at 'approve'
   | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; diagnosis?: Diagnosis };
 

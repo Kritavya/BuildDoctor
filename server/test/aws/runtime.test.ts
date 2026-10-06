@@ -14,6 +14,7 @@ vi.mock('../../src/llm/ollama.js', () => ({ chatJson: vi.fn() }));
 import { chatJson } from '../../src/llm/ollama.js';
 import { awsSteps, setDashboard, teardown } from '../../src/aws/steps.js';
 import { awsErr, fastTiming, makeCtx, makeRun } from './helpers.js';
+import { sleep } from '../../src/aws/util.js';
 
 const ec2 = mockClient(EC2Client);
 const ecr = mockClient(ECRClient);
@@ -39,6 +40,8 @@ function commandReturns(stdout: string, status = 'Success') {
     .resolves({ Status: status as 'Success', ResponseCode: status === 'Success' ? 0 : 1, StandardOutputContent: stdout, StandardErrorContent: '' });
 }
 
+const OPEN_3000 = { SecurityGroups: [{ GroupId: 'sg-1', IpPermissions: [{ IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, IpRanges: [{ CidrIp: '0.0.0.0/0' }] }] }] };
+
 beforeEach(() => {
   ec2.reset(); ecr.reset(); ssm.reset();
   vi.mocked(chatJson).mockReset();
@@ -47,6 +50,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('deploy step', () => {
+  beforeEach(() => { ec2.on(DescribeSecurityGroupsCommand).resolves(OPEN_3000); });
+
+  it('opens a remapped app port on the security group before redeploying', async () => {
+    ec2.on(AuthorizeSecurityGroupIngressCommand).resolves({});
+    ssm.on(PutParameterCommand).resolves({});
+    commandReturns('ok');
+    const run = deployedRun();
+    run.config.appPort = 8080;
+    expect((await step('deploy').run(makeCtx(run))).ok).toBe(true);
+    expect(ec2).toHaveReceivedCommandWith(AuthorizeSecurityGroupIngressCommand, { GroupId: 'sg-1', IpPermissions: [expect.objectContaining({ FromPort: 8080, ToPort: 8080 })] });
+    expect(ssm.commandCalls(SendCommandCommand)[0].args[0].input.Parameters!.commands[0]).toContain('-p 8080:8080');
+  });
+
+  it('leaves an already-open port alone', async () => {
+    ssm.on(PutParameterCommand).resolves({});
+    commandReturns('ok');
+    expect((await step('deploy').run(makeCtx(deployedRun()))).ok).toBe(true);
+    expect(ec2).not.toHaveReceivedCommand(AuthorizeSecurityGroupIngressCommand);
+  });
+
   it('stores env as SecureStrings and never puts values in the SSM command or logs', async () => {
     ssm.on(PutParameterCommand).resolves({});
     commandReturns('Logging in\nPulling\napp container: Up 3 seconds');
@@ -101,18 +124,22 @@ describe('health step', () => {
     expect(chatJson).not.toHaveBeenCalled();
   });
 
-  it('asks the LLM with redacted evidence and retries only for runtime-config fixes', async () => {
+  it('asks the LLM with redacted evidence; a missing env var stops with "please provide" instead of retrying', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
     ec2.on(DescribeSecurityGroupsCommand).resolves(openSg);
-    commandReturns(`== docker ps -a\napp Exited (1)\nError: connect failed password=${SECRET}`);
+    commandReturns(`== docker ps -a\napp Exited (1)\nError: DATABASE_URL is not set; connect failed password=${SECRET}`);
     vi.mocked(chatJson).mockResolvedValue({
-      rootCause: 'DATABASE_URL missing', evidence: 'connect failed', attemptedFix: 'set DATABASE_URL', result: 'not-fixed', fixLevel: 'runtime-config',
+      rootCause: 'DATABASE_URL missing', evidence: 'connect failed', attemptedFix: 'set DATABASE_URL=postgres://x', result: 'not-fixed', fixLevel: 'runtime-config',
+      missingEnv: ['DATABASE_URL', 'DB_PASSWORD', 'MADE_UP_VAR', 'bad name'],
     });
     const ctx = makeCtx(deployedRun());
     const res = await step('health').run(ctx);
 
-    expect(res).toMatchObject({ ok: false, retryFrom: 'deploy', diagnosis: { rootCause: 'DATABASE_URL missing' } });
+    expect(res).toMatchObject({ ok: false, summary: 'Missing env var(s): DATABASE_URL', diagnosis: { nextStep: expect.stringMatching(/^Please provide DATABASE_URL /) } });
+    expect(res).not.toHaveProperty('retryFrom');
+    expect(res).not.toHaveProperty('patch');
     expect((res as { diagnosis: object }).diagnosis).not.toHaveProperty('fixLevel');
+    expect((res as { diagnosis: object }).diagnosis).not.toHaveProperty('missingEnv');
     const prompt = JSON.stringify(vi.mocked(chatJson).mock.calls[0][0]);
     expect(prompt).not.toContain(SECRET);
     expect(prompt).toContain('***');
@@ -135,7 +162,44 @@ describe('health step', () => {
   });
 });
 
+describe('health port remap', () => {
+  const openSg = OPEN_3000;
+  const failing = () => vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+
+  it('retries from deploy with an appPort patch when the logs show another port', async () => {
+    failing();
+    ec2.on(DescribeSecurityGroupsCommand).resolves(openSg);
+    commandReturns('== docker logs --tail 100 app\nServer listening on port 8080\n== listening sockets\nnothing listening on 3000');
+    vi.mocked(chatJson).mockResolvedValue({ rootCause: 'app listens on 8080', evidence: 'listening on port 8080', attemptedFix: 'map 8080', result: 'not-fixed', fixLevel: 'runtime-config', listenPort: 8080, missingEnv: [] });
+    const res = await step('health').run(makeCtx(deployedRun()));
+    expect(res).toMatchObject({ ok: false, retryFrom: 'deploy', patch: { appPort: 8080 } });
+    expect((res as { diagnosis: object }).diagnosis).not.toHaveProperty('listenPort');
+  });
+
+  it('does not retry when the suggested port is absent from the evidence, or no patch is possible', async () => {
+    failing();
+    ec2.on(DescribeSecurityGroupsCommand).resolves(openSg);
+    commandReturns('== docker logs --tail 100 app\ncontainer a5000b crashed');
+    vi.mocked(chatJson)
+      .mockResolvedValueOnce({ rootCause: 'x', evidence: '', attemptedFix: '', result: 'not-fixed', fixLevel: 'runtime-config', listenPort: 5000 })
+      .mockResolvedValueOnce({ rootCause: 'x', evidence: '', attemptedFix: 'restart', result: 'not-fixed', fixLevel: 'runtime-config', listenPort: null });
+    for (let i = 0; i < 2; i++) {
+      const res = await step('health').run(makeCtx(deployedRun()));
+      expect(res.ok).toBe(false);
+      expect(res).not.toHaveProperty('retryFrom');
+      expect(res).not.toHaveProperty('patch');
+    }
+  });
+});
+
 describe('dashboard', () => {
+  it('step keeps a state set through the API before it ran', async () => {
+    const run = deployedRun();
+    run.outputs.dashboard = { enabled: true, metricsUrl: 'http://1.2.3.4:18080/' };
+    await step('dashboard').run(makeCtx(run));
+    expect(run.outputs.dashboard.enabled).toBe(true);
+  });
+
   it('step leaves it off but available', async () => {
     const run = deployedRun();
     const res = await step('dashboard').run(makeCtx(run));
@@ -278,5 +342,15 @@ describe('teardown', () => {
     expect(ec2).not.toHaveReceivedCommand(TerminateInstancesCommand);
     expect(ec2).not.toHaveReceivedCommand(DeleteSecurityGroupCommand);
     expect(out[0]).toMatch(/Kept EC2 instance i-1: run tags missing/);
+  });
+});
+
+describe('sleep', () => {
+  it('detaches its abort listener once it resolves', async () => {
+    const ac = new AbortController();
+    const remove = vi.spyOn(ac.signal, 'removeEventListener');
+    await sleep(0, ac.signal);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    await expect(Promise.all([sleep(1000, ac.signal), Promise.resolve().then(() => ac.abort())])).rejects.toThrow('aborted');
   });
 });

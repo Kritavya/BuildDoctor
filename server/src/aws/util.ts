@@ -20,8 +20,10 @@ export const ROLE_NAME = 'BuildDoctorEC2Role';
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new Error('aborted'));
   return new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
+    const onAbort = () => { clearTimeout(t); reject(new Error('aborted')); };
+    // Remove the listener on resolve: long polls would otherwise pile listeners onto the run's signal.
+    const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

@@ -3,19 +3,21 @@ import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import { awsSteps, plannedActions, setDashboard, teardown } from './aws/steps.js';
+import { appPort } from './aws/util.js';
 import { MODEL, ollamaReady } from './llm/ollama.js';
 import { Engine } from './pipeline/engine.js';
 import { RunStore } from './pipeline/store.js';
-import { docker } from './steps/common.js';
+import { docker, imageTag } from './steps/common.js';
 import { localSteps } from './steps/index.js';
-import type { InstanceSize, RunConfig } from './types.js';
+import type { InstanceSize, RunConfig, RunState } from './types.js';
 
 const INSTANCE_SIZES: InstanceSize[] = ['t4g.micro', 't4g.small', 't4g.medium'];
 
 export function createApp(
   store = new RunStore(),
   engine = new Engine(store, [...localSteps, ...awsSteps], {
-    planApproval: (run) => ({ actions: plannedActions(run.config, run.config.appPort ?? run.analysis?.port ?? 80) }),
+    planApproval: (run) => ({ actions: plannedActions(run.config, appPort(run)) }),
+    cleanup: removeLocalImages,
   }),
 ) {
   const app = express();
@@ -39,7 +41,7 @@ export function createApp(
   });
 
   app.get('/api/runs', (_req, res) => {
-    res.json(store.list().map((r) => ({ id: r.id, repoUrl: r.config.repoUrl, status: r.status, createdAt: r.createdAt })));
+    res.json(store.list().map((r) => ({ id: r.id, repoUrl: redactUrl(r.config.repoUrl), status: r.status, createdAt: r.createdAt })));
   });
 
   app.get('/api/runs/:id', (req, res) => {
@@ -72,8 +74,13 @@ export function createApp(
     const run = getRun(req, res);
     if (!run) return;
     if (typeof req.body?.enabled !== 'boolean') return void res.status(400).json({ error: 'body must be { enabled: boolean }' });
+    if (run.status !== 'live') return void res.status(409).json({ error: `dashboard needs a live run (status: ${run.status})` });
     try {
-      res.json(await setDashboard(run, req.body.enabled));
+      const dashboard = await setDashboard(run, req.body.enabled);
+      // Mirror into the event stream so other tabs and replays see the new state.
+      store.emit(run.id, { type: 'output', node: 'dashboard', data: dashboard });
+      store.nodeLog(run.id, 'dashboard', `Dashboard turned ${req.body.enabled ? 'on' : 'off'}`);
+      res.json(dashboard);
     } catch (err) {
       res.status(500).json({ error: message(err) });
     }
@@ -82,10 +89,12 @@ export function createApp(
   app.post('/api/runs/:id/teardown', async (req, res) => {
     const run = getRun(req, res);
     if (!run) return;
-    engine.cancel(run.id);
+    // Wait for the pipeline to stop so a step mid-way through creating a resource has recorded it.
+    await engine.cancel(run.id);
     try {
       const deleted = await teardown(run);
       run.status = 'torn-down';
+      for (const line of deleted) store.nodeLog(run.id, 'dashboard', `teardown: ${line}`);
       res.json({ deleted });
     } catch (err) {
       res.status(500).json({ error: message(err) });
@@ -130,7 +139,17 @@ function validateConfig(b: unknown): string | undefined {
 // Env values never leave the server; the UI only needs the names.
 function redactRun<T extends { config: RunConfig }>(run: T): T {
   const env = run.config.env && Object.fromEntries(Object.keys(run.config.env).map((k) => [k, '***']));
-  return { ...run, config: { ...run.config, env } };
+  return { ...run, config: { ...run.config, env, repoUrl: redactUrl(run.config.repoUrl) } };
+}
+
+// Credentials embedded in an https clone URL.
+function redactUrl(url: string): string {
+  return url.replace(/(https?:\/\/)[^@\s/]+@/, '$1***@');
+}
+
+async function removeLocalImages(run: RunState): Promise<void> {
+  const tags = [imageTag(run.id), ...(run.outputs.ecrRepoUri ? [`${run.outputs.ecrRepoUri}:${run.id}`] : [])];
+  for (const t of tags) await docker.getImage(t).remove({ force: true }).catch(() => {});
 }
 
 function message(err: unknown): string {

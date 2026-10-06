@@ -6,6 +6,7 @@ import {
 } from '@aws-sdk/client-ecr';
 import type { Step, StepContext } from '../pipeline/step.js';
 import { clients } from './clients.js';
+import { imageTag } from '../steps/common.js';
 import { errMsg, errName, recordCreated, repoSlug, tags, throttledLogger } from './util.js';
 
 // Swappable in tests.
@@ -45,7 +46,7 @@ async function pushImage(ctx: StepContext, repoUri: string): Promise<string> {
   const serveraddress = auth.proxyEndpoint ?? `https://${repoUri.split('/')[0]}`;
 
   const docker = dockerFactory.create();
-  const local = `builddoctor/${run.id}:latest`;
+  const local = imageTag(run.id);
   await docker.getImage(local).tag({ repo: repoUri, tag: run.id });
   ctx.log(`Tagged ${local} as ${repoUri}:${run.id}; pushing...`);
 

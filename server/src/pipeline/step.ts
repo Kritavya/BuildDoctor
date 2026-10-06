@@ -1,4 +1,4 @@
-import type { NodeId, RunState, RunEvent, Diagnosis } from '../types.js';
+import type { ConfigPatch, NodeId, RunState, RunEvent, Diagnosis } from '../types.js';
 
 export interface StepContext {
   run: RunState;
@@ -11,7 +11,8 @@ export interface StepContext {
 export type StepResult =
   | { ok: true; summary: string; output?: unknown }
   // retryFrom: node the doctor loop should resume at after applying a fix.
-  | { ok: false; summary: string; error: string; retryFrom?: NodeId; diagnosis?: Diagnosis };
+  // patch: runtime-config change applied to run.config before resuming (see applyPatch in the engine).
+  | { ok: false; summary: string; error: string; retryFrom?: NodeId; diagnosis?: Diagnosis; patch?: ConfigPatch };
 
 export interface Step {
   id: NodeId;

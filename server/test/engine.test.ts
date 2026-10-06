@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Engine, failures } from '../src/pipeline/engine.js';
+import { existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { Engine, applyPatch, failures } from '../src/pipeline/engine.js';
 import type { Step, StepResult } from '../src/pipeline/step.js';
 import { RunStore } from '../src/pipeline/store.js';
 import { PIPELINE, type NodeId, type RunConfig, type RunEvent } from '../src/types.js';
@@ -167,5 +169,89 @@ describe('engine', () => {
     store.subscribe(run.id, (e) => replay.push(e));
     expect(replay).toEqual(store.events(run.id));
     expect(replay.at(-1)).toMatchObject({ type: 'done', status: 'live' });
+  });
+
+  it('health patch: applies a whitelisted appPort before retrying deploy', async () => {
+    const calls: NodeId[] = [];
+    const ports: Array<number | undefined> = [];
+    const diagnosis = { rootCause: 'listens on 8080', evidence: 'port 8080', attemptedFix: 'remap', result: 'not-fixed' as const };
+    const steps = fakeSteps(calls, {
+      health: (n) => (n === 1 ? { ok: false, summary: 'down', error: 'ECONNREFUSED', retryFrom: 'deploy', diagnosis, patch: { appPort: 8080 } } : { ok: true, summary: 'up' }),
+    });
+    const deploy = steps.find((s) => s.id === 'deploy')!;
+    const orig = deploy.run.bind(deploy);
+    deploy.run = async (ctx) => { ports.push(ctx.run.config.appPort); return orig(ctx); };
+    const { engine, run, events } = setup(steps);
+    const done = engine.start(run);
+    await waitFor(() => run.status === 'awaiting-approval');
+    engine.approve(run.id, true);
+    await done;
+    expect(ports).toEqual([3000, 8080]);
+    expect(events.find((e) => e.type === 'retry')).toMatchObject({ from: 'health', to: 'deploy', patch: { appPort: 8080 } });
+    expect(run.status).toBe('live');
+  });
+
+  it('health patch: rejects non-whitelisted keys (env values) and no-op ports without retrying', async () => {
+    for (const patch of [{ env: { DATABASE_URL: 'postgres://x' } }, { appPort: 3000 }, { appPort: 22 }, { appPort: 8080, env: {} }]) {
+      const calls: NodeId[] = [];
+      const steps = fakeSteps(calls, {
+        health: () => ({ ok: false, summary: 'down', error: 'x', retryFrom: 'deploy', patch: patch as never }),
+      });
+      const { engine, run, events } = setup(steps);
+      const done = engine.start(run);
+      await waitFor(() => run.status === 'awaiting-approval');
+      engine.approve(run.id, true);
+      await done;
+      expect(calls.filter((c) => c === 'deploy')).toHaveLength(1);
+      expect(events.some((e) => e.type === 'retry')).toBe(false);
+      expect(run.config.env).toBeUndefined();
+      expect(run.config.appPort).toBe(3000);
+      expect(events.at(-1)).toMatchObject({ type: 'done', status: 'failed', diagnosis: { nextStep: expect.stringMatching(/rejected/) } });
+    }
+  });
+
+  it('applyPatch whitelist', () => {
+    const { run } = setup([]);
+    expect(applyPatch(run, null)).toEqual({ rejected: 'not an object' });
+    expect(applyPatch(run, { appPort: 70000 })).toMatchObject({ rejected: expect.stringMatching(/invalid/) });
+    expect(applyPatch(run, { appPort: 5000 })).toEqual({ applied: { appPort: 5000 } });
+    expect(run.config.appPort).toBe(5000);
+  });
+
+  it('every node ends in a terminal status after a denial; workspace is removed', async () => {
+    const root = '/tmp/bd-test';
+    const { engine, run, events } = setup(fakeSteps([]));
+    mkdirSync(path.join(root, run.id, 'repo'), { recursive: true });
+    const done = engine.start(run);
+    await waitFor(() => run.status === 'awaiting-approval');
+    engine.approve(run.id, false);
+    await done;
+    const terminal = new Set(['success', 'failed', 'skipped']);
+    expect(PIPELINE.filter((n) => !terminal.has(run.nodes[n].status))).toEqual([]);
+    expect(run.nodes.ecr.status).toBe('skipped');
+    expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
+    expect(existsSync(path.join(root, run.id))).toBe(false);
+  });
+
+  it('cancel resolves only after the running step has returned', async () => {
+    let finished = false;
+    const steps = fakeSteps([]);
+    steps[0] = {
+      id: 'clone',
+      run: (ctx) => new Promise((resolve) => ctx.signal.addEventListener('abort', () => setTimeout(() => {
+        finished = true;
+        resolve({ ok: false, summary: 'aborted', error: 'aborted' });
+      }, 20))),
+    };
+    const cleaned: string[] = [];
+    const store = new RunStore();
+    const engine = new Engine(store, steps, { workspaceRoot: '/tmp/bd-test', cleanup: async (r) => { cleaned.push(r.id); } });
+    const run = store.create(config());
+    void engine.start(run);
+    await engine.cancel(run.id);
+    expect(finished).toBe(true);
+    expect(run.status).toBe('failed');
+    expect(run.nodes.clone.status).toBe('failed');
+    expect(cleaned).toEqual([run.id]);
   });
 });
