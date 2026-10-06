@@ -31,7 +31,8 @@ export const RETRY_EDGES: Array<[from: NodeId, to: NodeId]> = [
 
 export type NodeStatus = 'idle' | 'running' | 'success' | 'failed' | 'waiting' | 'skipped';
 
-export type InstanceSize = 't3.micro' | 't3.small' | 't3.medium';
+// Graviton (arm64): images built natively on Apple Silicon run as-is, no cross-compile.
+export type InstanceSize = 't4g.micro' | 't4g.small' | 't4g.medium';
 
 export interface RunConfig {
   repoUrl: string;
