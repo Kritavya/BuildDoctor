@@ -3,7 +3,7 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { CircleCheck, GitBranch, RotateCcw, ShieldCheck, X } from 'lucide-react'
 import { backend, isMock, params } from './api'
 import type { AnalysisResult, DeployOutputs, NodeId, RunEvent } from './contract'
-import { defaultForm, repoLabel, toRunConfig, type FormState } from './form'
+import { defaultForm, fromRunConfig, repoLabel, toRunConfig, type FormState } from './form'
 import { NODE_META } from './meta'
 import { initialRun, reducer } from './state'
 import { Canvas } from './components/Canvas'
@@ -65,6 +65,38 @@ export default function App() {
     }
   }, [toast])
 
+  // Follows a run's event stream; the server replays its full history first.
+  const follow = useCallback((id: string) => {
+    unsub.current?.()
+    dispatch({ kind: 'started', runId: id })
+    rememberRun(id)
+    quiet.current = true
+    unsub.current = backend.subscribe(id, onEvent, () => {
+      quiet.current = true
+      dispatch({ kind: 'replay' })
+      window.setTimeout(() => (quiet.current = false), 1000)
+    })
+    window.setTimeout(() => (quiet.current = false), 1000)
+  }, [onEvent])
+
+  // Reopen the last run after a refresh (?run=<id>, else the one remembered in this browser).
+  const restored = useRef(false)
+  useEffect(() => {
+    if (isMock || restored.current) return
+    restored.current = true
+    const id = params.get('run') ?? readRememberedRun()
+    if (!id) return
+    backend.getRun(id).then(
+      (state) => {
+        setFormState(fromRunConfig(state.config))
+        setFormOpen(false)
+        setConsoleOpen(true)
+        follow(id)
+      },
+      () => rememberRun(undefined),
+    )
+  }, [follow])
+
   const deploy = useCallback(async (f: FormState) => {
     setStartError(undefined)
     unsub.current?.()
@@ -72,15 +104,9 @@ export default function App() {
     cancelled.current = false
     try {
       const id = await backend.start(toRunConfig(f))
-      dispatch({ kind: 'started', runId: id })
       if (params.get('form') !== '1') setFormOpen(false)
       if (params.get('console') !== '0') setConsoleOpen(true)
-      quiet.current = true
-      unsub.current = backend.subscribe(id, onEvent, () => {
-        quiet.current = true
-        dispatch({ kind: 'replay' })
-        window.setTimeout(() => (quiet.current = false), 1000)
-      })
+      follow(id)
       quiet.current = false
     } catch (e) {
       dispatch({ kind: 'reset' })
@@ -90,7 +116,7 @@ export default function App() {
           : `The server refused the run: ${(e as Error).message}`,
       )
     }
-  }, [onEvent])
+  }, [follow])
 
   // Demo checkpoints (?mock=1&step=...) start on load.
   const started = useRef(false)
@@ -239,4 +265,26 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+const RUN_KEY = 'builddoctor:lastRun'
+
+function rememberRun(id: string | undefined) {
+  if (isMock) return
+  const url = new URL(window.location.href)
+  if (id) url.searchParams.set('run', id)
+  else url.searchParams.delete('run')
+  window.history.replaceState(null, '', url)
+  try {
+    if (id) localStorage.setItem(RUN_KEY, id)
+    else localStorage.removeItem(RUN_KEY)
+  } catch { /* storage blocked: the URL still carries the run */ }
+}
+
+function readRememberedRun(): string | null {
+  try {
+    return localStorage.getItem(RUN_KEY)
+  } catch {
+    return null
+  }
 }

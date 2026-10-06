@@ -52,6 +52,22 @@ export function validate(f: FormState): Partial<Record<'repoUrl' | 'appPort', st
   return errors
 }
 
+// Rebuilds the form from a stored run. Env values are never sent back by the server, so only keys return.
+export function fromRunConfig(c: RunConfig): FormState {
+  return {
+    repoUrl: c.repoUrl,
+    branch: c.branch ?? '',
+    appPort: c.appPort ? String(c.appPort) : '',
+    env: Object.keys(c.env ?? {}).map((k) => newEnvRow(k, '')),
+    region: c.aws.region,
+    instanceType: c.aws.instanceType,
+    openPorts: c.aws.openPorts ?? [],
+    existingInstanceId: c.aws.existingInstanceId ?? '',
+    existingSecurityGroupId: c.aws.existingSecurityGroupId ?? '',
+    maxFixAttempts: c.maxFixAttempts ?? 3,
+  }
+}
+
 export function toRunConfig(f: FormState): RunConfig {
   const env: Record<string, string> = {}
   for (const r of f.env) if (r.key.trim()) env[r.key.trim()] = r.value
