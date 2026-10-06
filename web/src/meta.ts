@@ -57,5 +57,4 @@ export const REGIONS: Array<{ id: string; name: string }> = [
 export const COMMON_PORTS: Array<{ port: number; label: string; hint: string }> = [
   { port: 80, label: 'HTTP', hint: 'Plain web traffic' },
   { port: 443, label: 'HTTPS', hint: 'Secure web traffic, if you add TLS later' },
-  { port: 22, label: 'SSH', hint: 'Remote shell. Leave off unless you need it' },
 ]

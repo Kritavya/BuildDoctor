@@ -46,6 +46,7 @@ export function ResultCard(p: Props) {
           </label>
           {on ? (
             <div className="dash-links">
+              <span className="dash-hint dash-hint--short">Visible only from your IP</span>
               {p.dashboard?.metricsUrl && (
                 <a className="dash-link" href={p.dashboard.metricsUrl} target="_blank" rel="noreferrer">
                   <Activity size={14} /> Metrics <span>cAdvisor</span>
@@ -58,7 +59,7 @@ export function ResultCard(p: Props) {
               )}
             </div>
           ) : (
-            <span className="dash-hint">CPU, memory and container logs in your browser</span>
+            <span className="dash-hint">CPU, memory and container logs. Visible only from your IP.</span>
           )}
         </div>
 
@@ -89,10 +90,12 @@ export function ResultCard(p: Props) {
       <section className="result result--down" aria-label="Torn down">
         <span className="result-badge"><CircleCheck size={16} /></span>
         <div className="result-text">
-          <p className="result-title">Everything was removed</p>
-          <p className="result-desc">
-            Deleted {p.deleted?.length ? p.deleted.map((d) => <code key={d}>{d}</code>) : 'all created resources'}
-          </p>
+          <p className="result-title">Teardown finished</p>
+          {p.deleted?.length ? (
+            <ul className="down-list">
+              {p.deleted.map((d) => <li key={d} className={d.startsWith('FAILED') ? 'is-bad' : d.startsWith('Kept') ? 'is-kept' : ''}>{d}</li>)}
+            </ul>
+          ) : <p className="result-desc">Nothing needed removing.</p>}
         </div>
       </section>
     )

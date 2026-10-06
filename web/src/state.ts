@@ -131,7 +131,11 @@ export function reducer(s: RunUi, a: Action): RunUi {
     case 'approvalSent':
       return { ...s, approval: undefined, phase: a.approved ? 'running' : s.phase }
     case 'dashboard':
-      return { ...s, dashboard: a.value }
+      // The server answers the toggle directly (no pipeline event), so reflect it on the step card here.
+      return patchNode({ ...s, dashboard: a.value }, 'dashboard', (n) => ({
+        ...n,
+        summary: a.value?.enabled ? 'Dashboard on · visible only from your IP' : 'Dashboard available (off)',
+      }))
     case 'tornDown':
       return { ...s, phase: 'torn-down', deleted: a.deleted }
   }

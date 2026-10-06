@@ -181,6 +181,7 @@ export function PortsChecklist({ form, set, readOnly, appPort }: { form: FormSta
           )
         })}
       </div>
+      <p className="field-msg">SSH (22) is never opened. BuildDoctor manages the server through AWS Systems Manager.</p>
     </fieldset>
   )
 }

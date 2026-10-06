@@ -1,4 +1,4 @@
-import type { DeployOutputs, RunConfig, RunEvent } from './contract'
+import type { DeployOutputs, RunConfig, RunEvent, RunState } from './contract'
 import { createMockBackend } from './mock'
 
 export interface LocalHealth {
@@ -14,6 +14,7 @@ export interface Backend {
   start(cfg: RunConfig): Promise<string>
   /** onReplay fires when the stream reconnects; the server then replays the whole history. */
   subscribe(id: string, onEvent: (ev: RunEvent) => void, onReplay?: () => void): () => void
+  getRun(id: string): Promise<RunState>
   approve(id: string, approved: boolean): Promise<void>
   dashboard(id: string, enabled: boolean): Promise<DeployOutputs['dashboard']>
   teardown(id: string): Promise<{ deleted: string[] }>
@@ -62,6 +63,7 @@ const realBackend: Backend = {
     }
     return () => es.close()
   },
+  getRun: (id) => fetch(`/api/runs/${encodeURIComponent(id)}`).then((r) => json<RunState>(r)),
   approve: (id, approved) => post(`/api/runs/${id}/approve`, { approved }).then((r) => {
     if (!r.ok) throw new Error(`Server answered ${r.status}`)
   }),

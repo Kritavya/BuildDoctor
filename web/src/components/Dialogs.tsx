@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
-import { KeyRound, LoaderCircle, Package, Server, ShieldHalf, ShieldCheck, TriangleAlert } from 'lucide-react'
-import type { ApprovalRequest, InstanceSize } from '../contract'
+import { KeyRound, LoaderCircle, Package, Rocket, Server, ShieldHalf, ShieldCheck, TriangleAlert } from 'lucide-react'
+import type { ApprovalRequest, DeployOutputs, InstanceSize } from '../contract'
 import { INSTANCE_SIZES } from '../meta'
 
 function Modal({ children, onClose, labelledBy }: { children: ReactNode; onClose: () => void; labelledBy: string }) {
@@ -29,10 +29,11 @@ function Modal({ children, onClose, labelledBy }: { children: ReactNode; onClose
 }
 
 function actionIcon(a: string) {
-  if (/ecr|registry|repository/i.test(a)) return <Package size={15} />
-  if (/security group|port/i.test(a)) return <ShieldHalf size={15} />
-  if (/iam|role|profile|ssm|parameter|env/i.test(a)) return <KeyRound size={15} />
-  return <Server size={15} />
+  if (/^run container/i.test(a)) return <Rocket size={15} />
+  if (/ec2 instance|existing instance/i.test(a)) return <Server size={15} />
+  if (/ecr/i.test(a)) return <Package size={15} />
+  if (/security group/i.test(a)) return <ShieldHalf size={15} />
+  return <KeyRound size={15} />
 }
 
 export function ApprovalModal({ request, size, busy, onApprove, onCancel, onDismiss }: {
@@ -72,7 +73,34 @@ export function ApprovalModal({ request, size, busy, onApprove, onCancel, onDism
   )
 }
 
-export function TeardownDialog({ busy, onConfirm, onClose }: { busy: boolean; onConfirm: () => void; onClose: () => void }) {
+type Created = DeployOutputs['created'][number]
+
+function describe(r: Created): { icon: ReactNode; title: string; detail: string } {
+  switch (r.type) {
+    case 'ec2':
+      return { icon: <Server size={15} />, title: 'EC2 instance', detail: 'Terminated' }
+    case 'sg':
+      return { icon: <ShieldHalf size={15} />, title: 'Security group', detail: 'Deleted' }
+    case 'sg-rule': {
+      const [group, port, cidr] = r.id.split(':')
+      return { icon: <ShieldHalf size={15} />, title: `Inbound rule tcp/${port} from ${cidr}`, detail: `Removed from your group ${group}` }
+    }
+    case 'ecr':
+      return { icon: <Package size={15} />, title: 'ECR image', detail: "This run's image; the repository too if it is then empty" }
+    default:
+      return { icon: <KeyRound size={15} />, title: r.type, detail: 'Kept' }
+  }
+}
+
+export function TeardownDialog({ busy, resources, envVars, onConfirm, onClose }: {
+  busy: boolean
+  /** undefined while loading; null if the run could not be fetched */
+  resources: Created[] | undefined | null
+  envVars: number
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  const removable = resources?.filter((r) => r.type !== 'iam-role' && r.type !== 'instance-profile') ?? []
   return (
     <Modal onClose={busy ? () => {} : onClose} labelledBy="teardown-title">
       <div className="modal-head">
@@ -80,11 +108,34 @@ export function TeardownDialog({ busy, onConfirm, onClose }: { busy: boolean; on
         <div>
           <h2 id="teardown-title" className="modal-title">Tear down everything?</h2>
           <p className="modal-sub">
-            This deletes the EC2 instance and the security group BuildDoctor created, this run's image (and the ECR repository if that leaves it empty), any firewall rules it added and the stored env parameters. Your app goes offline and this cannot be undone.
+            BuildDoctor removes what this run created. Your app goes offline and this cannot be undone.
           </p>
         </div>
       </div>
-      <p className="modal-note">The shared BuildDoctorEC2Role IAM role is kept for future runs. An instance or security group you supplied yourself is left running; only the rules BuildDoctor added are removed.</p>
+      <ul className="res-list" aria-busy={resources === undefined}>
+        {resources === undefined && [0, 1, 2].map((i) => <li key={i}><span className="res-skeleton" /></li>)}
+        {resources === null && <li>Could not load the list of created resources. Teardown still removes only what this run created.</li>}
+        {removable.map((r) => {
+          const d = describe(r)
+          return (
+            <li key={r.type + r.id}>
+              <span className="approve-ico">{d.icon}</span>
+              <span className="res-kind">{d.title} <small>{d.detail}</small></span>
+              <code>{r.type === 'sg-rule' ? '' : r.id}</code>
+            </li>
+          )
+        })}
+        {resources && envVars > 0 && (
+          <li>
+            <span className="approve-ico"><KeyRound size={15} /></span>
+            <span className="res-kind">Env parameters <small>{envVars} SSM SecureString value{envVars > 1 ? 's' : ''} deleted</small></span>
+          </li>
+        )}
+        {resources && removable.length === 0 && envVars === 0 && <li>This run has not created anything in AWS yet.</li>}
+      </ul>
+      <p className="modal-note">
+        The shared BuildDoctorEC2Role IAM role is kept for future runs. An instance or security group you supplied yourself keeps running.
+      </p>
       <div className="modal-actions">
         <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy} data-autofocus>Keep it running</button>
         <button type="button" className="btn btn--danger" onClick={onConfirm} disabled={busy}>

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Check, Copy, FileText, Stethoscope } from 'lucide-react'
 import type { AnalysisResult, Diagnosis } from '../contract'
+import { isAnalysis, isDiagnosis, looksLikeDockerfile } from '../outputs'
 
 export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
   const [done, setDone] = useState(false)
@@ -21,12 +22,6 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
     </button>
   )
 }
-
-const isAnalysis = (d: unknown): d is AnalysisResult =>
-  typeof d === 'object' && d !== null && 'runtime' in d && 'dockerfile' in d
-export const isDiagnosis = (d: unknown): d is Diagnosis =>
-  typeof d === 'object' && d !== null && 'rootCause' in d && 'evidence' in d
-const looksLikeDockerfile = (d: unknown): d is string => typeof d === 'string' && /^\s*(#.*\n\s*)*FROM\s/im.test(d)
 
 const RUNTIME: Record<AnalysisResult['runtime'], string> = {
   node: 'Node.js', python: 'Python', go: 'Go', unknown: 'Not recognised',

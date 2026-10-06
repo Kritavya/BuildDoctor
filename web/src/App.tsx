@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { CircleCheck, GitBranch, RotateCcw, ShieldCheck, X } from 'lucide-react'
 import { backend, isMock, params } from './api'
-import type { AnalysisResult, NodeId, RunEvent } from './contract'
+import type { AnalysisResult, DeployOutputs, NodeId, RunEvent } from './contract'
 import { defaultForm, repoLabel, toRunConfig, type FormState } from './form'
 import { NODE_META } from './meta'
 import { initialRun, reducer } from './state'
@@ -34,6 +34,7 @@ export default function App() {
   const [dashBusy, setDashBusy] = useState(false)
   const [teardownOpen, setTeardownOpen] = useState(false)
   const [tearing, setTearing] = useState(false)
+  const [created, setCreated] = useState<DeployOutputs['created'] | null | undefined>()
   const [toasts, setToasts] = useState<Toast[]>([])
   const unsub = useRef<() => void>(undefined)
   const cancelled = useRef(false)
@@ -137,12 +138,22 @@ export default function App() {
       const r = await backend.teardown(run.runId)
       dispatch({ kind: 'tornDown', deleted: r.deleted })
       setTeardownOpen(false)
-      toast('ok', `Removed ${r.deleted.length} resources.`)
+      toast('ok', 'Teardown finished.')
     } catch (e) {
       toast('info', `Teardown failed: ${(e as Error).message}`)
     } finally {
       setTearing(false)
     }
+  }
+
+  const openTeardown = () => {
+    if (!run.runId) return
+    setCreated(undefined)
+    setTeardownOpen(true)
+    backend.getRun(run.runId).then(
+      (r) => setCreated(r.outputs.created),
+      () => setCreated(null),
+    )
   }
 
   const newRun = () => {
@@ -172,12 +183,13 @@ export default function App() {
         <main className="center">
           <ResultCard phase={run.phase} appUrl={run.done?.appUrl} diagnosis={run.done?.diagnosis}
             dashboard={run.dashboard} dashboardBusy={dashBusy} deleted={run.deleted}
-            onDashboard={toggleDashboard} onTeardown={() => setTeardownOpen(true)}
+            onDashboard={toggleDashboard} onTeardown={openTeardown}
             onShowDiagnosis={() => setSelected(failedNode ?? 'build')} />
 
           <div className="canvas-wrap">
             <ReactFlowProvider>
-              <Canvas run={run} selected={selected} ghost={ghost} onSelect={setSelected} />
+              <Canvas run={run} selected={selected} ghost={ghost} onSelect={setSelected}
+                layoutKey={`${formOpen}|${consoleOpen}|${run.runId ?? ''}|${run.phase === 'live' || run.phase === 'failed' || run.phase === 'torn-down'}`} />
             </ReactFlowProvider>
 
             {ghost && !selected && (
@@ -211,7 +223,7 @@ export default function App() {
         <ApprovalModal request={run.approval} size={form.instanceType} busy={approving}
           onApprove={() => void respond(true)} onCancel={() => void respond(false)} onDismiss={() => setApprovalHidden(true)} />
       )}
-      {teardownOpen && <TeardownDialog busy={tearing} onConfirm={() => void teardown()} onClose={() => setTeardownOpen(false)} />}
+      {teardownOpen && <TeardownDialog busy={tearing} resources={created} envVars={Object.keys(toRunConfig(form).env ?? {}).length} onConfirm={() => void teardown()} onClose={() => setTeardownOpen(false)} />}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (

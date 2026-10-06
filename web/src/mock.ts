@@ -8,7 +8,7 @@
 //   &play=1                 with step: keep playing after the fast-forward
 //   &speed=2                playback speed multiplier
 import type { Backend, LocalHealth } from './api'
-import type { Diagnosis, NodeId, NodeStatus, RunConfig, RunEvent } from './contract'
+import type { DeployOutputs, Diagnosis, NodeId, NodeStatus, RunConfig, RunEvent, RunState } from './contract'
 
 type Entry = { d: number; ev: RunEvent | Omit<Extract<RunEvent, { type: 'log' }>, 'ts'> }
 
@@ -51,16 +51,33 @@ const BUILD_DIAGNOSIS: Diagnosis = {
   nextStep: 'Re-lint and rebuild with the corrected Dockerfile.',
 }
 
-function script(cfg: RunConfig): Entry[] {
+// Strings below mirror server/src/steps/*.ts and server/src/aws/*.ts so the demo reads like a real run.
+export const MOCK_IP = '13.233.41.20'
+export const MOCK_INSTANCE = 'i-0f3b2c9e71a4d8c55'
+export const MOCK_SG = 'sg-0a91c4e27b3d55f10'
+export const DASHBOARD_PORTS = { metrics: 18080, logs: 18081 } as const
+const CALLER_CIDR = '49.36.112.7/32'
+
+/** Same slug rule as the server's repoSlug(). */
+export function repoSlug(repoUrl: string): string {
+  const last = repoUrl.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop() ?? 'app'
+  const s = last.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
+  return (s || 'app').slice(0, 200)
+}
+
+function script(cfg: RunConfig, runId: string): Entry[] {
   const repo = cfg.repoUrl.replace(/^https?:\/\/(www\.)?github\.com\//, '').replace(/\.git$/, '') || 'acme/notes-api'
-  const name = repo.split('/').pop() || 'app'
+  const ecrRepo = `builddoctor/${repoSlug(cfg.repoUrl)}`
+  const localTag = `builddoctor/${runId}:latest`
   const branch = cfg.branch || 'main'
   const port = cfg.appPort || 3000
   const region = cfg.aws.region
   const size = cfg.aws.instanceType
-  const ports = Array.from(new Set([port, ...cfg.aws.openPorts])).sort((a, b) => a - b)
-  const ip = '13.233.41.20'
-  const appUrl = `http://${ip}:${port}`
+  const ports = Array.from(new Set([port, ...cfg.aws.openPorts])).filter((p) => p !== 22)
+  const envCount = Object.keys(cfg.env ?? {}).length
+  const ip = MOCK_IP
+  const appUrl = `http://${ip}:${port}/`
+  const repoUri = `172083944099.dkr.ecr.${region}.amazonaws.com/${ecrRepo}`
 
   const out: Entry[] = []
   const node = (d: number, n: NodeId, status: NodeStatus, summary?: string, attempt?: number) =>
@@ -72,7 +89,7 @@ function script(cfg: RunConfig): Entry[] {
   log(150, 'clone', `$ git clone --depth 1 --branch ${branch} https://github.com/${repo}.git`)
   log(500, 'clone', 'Receiving objects: 100% (142/142), 88.4 KiB | 1.2 MiB/s, done.')
   log(200, 'clone', 'HEAD is now at 3f2c1a9 Add notes search endpoint')
-  node(200, 'clone', 'success', `${branch} @ 3f2c1a9, 142 files`)
+  node(200, 'clone', 'success', `Cloned ${branch} @ 3f2c1a9`)
 
   node(250, 'analyze', 'running', 'Reading package.json and source')
   log(300, 'analyze', 'Found package.json, package-lock.json')
@@ -90,20 +107,19 @@ function script(cfg: RunConfig): Entry[] {
     dependencyFiles: ['package.json', 'package-lock.json'],
     dockerfile: 'missing',
   })
-  node(150, 'analyze', 'success', `Express on Node 20, port ${port}`)
+  node(150, 'analyze', 'success', `express :${port} · Dockerfile missing`)
 
   node(250, 'dockerfile', 'running', 'Local model drafting a Dockerfile', 1)
   log(400, 'dockerfile', 'Prompting qwen2.5-coder:7b with project facts (secret values withheld)')
   log(1100, 'dockerfile', 'Draft received: 12 lines, base image node:20-alpine')
   output(100, 'dockerfile', DOCKERFILE_V1)
-  node(150, 'dockerfile', 'success', 'Drafted 12 lines', 1)
+  node(150, 'dockerfile', 'success', 'Dockerfile generated (model)', 1)
 
   node(250, 'lint', 'running', 'hadolint', 1)
-  log(500, 'lint', 'DL3018 info: pin versions in apk add (not applicable)')
-  log(150, 'lint', 'ok 0 errors, 0 warnings')
-  node(150, 'lint', 'success', '0 errors, 0 warnings', 1)
+  log(500, 'lint', 'hadolint: no findings')
+  node(150, 'lint', 'success', 'Lint passed · clean', 1)
 
-  node(250, 'build', 'running', `docker build -t ${name}:3f2c1a9`, 1)
+  node(250, 'build', 'running', `docker build -t ${localTag}`, 1)
   log(250, 'build', '#1 [internal] load build definition from Dockerfile')
   log(300, 'build', '#2 [1/6] FROM docker.io/library/node:20-alpine')
   log(400, 'build', '#5 [3/6] COPY package.json package-lock.json ./')
@@ -112,74 +128,89 @@ function script(cfg: RunConfig): Entry[] {
   log(300, 'build', '#8 [6/6] RUN npm run build')
   log(250, 'build', 'ERROR npm ERR! Missing script: "build"')
   log(100, 'build', 'ERROR process "/bin/sh -c npm run build" did not complete successfully: exit code 1')
-  node(200, 'build', 'failed', 'Missing script: "build"', 1)
+  node(200, 'build', 'failed', 'Build failed: npm ERR! Missing script: "build"', 1)
 
   log(500, 'build', 'Doctor: reading the failing step and package.json scripts')
   out.push({ d: 900, ev: { type: 'retry', from: 'build', to: 'dockerfile', attempt: 2, diagnosis: BUILD_DIAGNOSIS } })
-  output(0, 'build', BUILD_DIAGNOSIS)
 
   node(300, 'dockerfile', 'running', 'Applying the fix', 2)
   log(900, 'dockerfile', 'Removed "RUN npm run build"; switched to npm ci --omit=dev')
   output(100, 'dockerfile', DOCKERFILE_V2)
-  node(150, 'dockerfile', 'success', 'Fixed: dropped the build step', 2)
+  node(150, 'dockerfile', 'success', 'Dockerfile rewritten (fix attempt 2)', 2)
 
   node(200, 'lint', 'running', 'hadolint', 2)
-  log(400, 'lint', 'ok 0 errors, 0 warnings')
-  node(100, 'lint', 'success', '0 errors, 0 warnings', 2)
+  log(400, 'lint', 'hadolint: no findings')
+  node(100, 'lint', 'success', 'Lint passed · clean', 2)
 
-  node(200, 'build', 'running', `docker build -t ${name}:3f2c1a9`, 2)
+  node(200, 'build', 'running', `docker build -t ${localTag}`, 2)
   log(300, 'build', '#2 [1/5] FROM docker.io/library/node:20-alpine (cached)')
   log(600, 'build', '#6 [3/5] RUN npm ci --omit=dev && npm cache clean --force')
   log(500, 'build', '#7 [4/5] COPY src ./src')
-  log(300, 'build', `#9 naming to docker.io/library/${name}:3f2c1a9 done`)
-  log(100, 'build', 'ok Image size 142 MB')
-  node(150, 'build', 'success', 'Image built, 142 MB in 38s', 2)
+  log(300, 'build', `#9 naming to docker.io/${localTag} done`)
+  node(150, 'build', 'success', `Built ${localTag} · 142 MB · 38s`, 2)
 
   node(250, 'smoke', 'running', `Starting container on :${port}`)
-  log(400, 'smoke', `$ docker run -d -p ${port}:${port} --env-file <masked> ${name}:3f2c1a9`)
-  log(700, 'smoke', `Server listening on ${port}`)
-  log(300, 'smoke', `GET http://localhost:${port}/  ->  200 OK in 41 ms`)
-  node(150, 'smoke', 'success', `GET / returned 200 in 41 ms`)
+  log(400, 'smoke', `$ docker run -d -p ${port}:${port} --env-file <masked> ${localTag}`)
+  log(700, 'smoke', `[app] Server listening on ${port}`)
+  log(300, 'smoke', `ok GET http://localhost:${port}/  ->  HTTP 200`)
+  node(150, 'smoke', 'success', `Container up · port ${port} answered HTTP 200`)
 
+  // plannedActions() in server/src/aws/steps.ts
   const actions = [
-    `Create ECR repository "${name}" in ${region}`,
-    `Create security group "builddoctor-${name}" opening ports ${ports.join(', ')}`,
-    `Launch EC2 instance ${size} (arm64) in ${region}`,
-    'Store 2 env vars as encrypted SSM parameters',
+    `Create ECR repository ${ecrRepo} in ${region} if missing, and push the image`,
+    cfg.aws.existingSecurityGroupId
+      ? `Use security group ${cfg.aws.existingSecurityGroupId} (add inbound tcp/${port} from 0.0.0.0/0 if missing)`
+      : `Create security group with inbound ${ports.map((p) => `tcp/${p}`).join(', ')} from 0.0.0.0/0 (no SSH)`,
+    cfg.aws.existingInstanceId
+      ? `Deploy to existing instance ${cfg.aws.existingInstanceId} via SSM`
+      : `Create EC2 instance ${size} (Amazon Linux 2023 arm64, 16 GB gp3) in ${region}; create IAM role BuildDoctorEC2Role if missing`,
   ]
-  node(250, 'approve', 'waiting', 'Waiting for your go-ahead')
+  if (envCount) actions.push('Store env vars as SSM SecureString parameters')
+  actions.push(`Run container 'app' on port ${port}`)
+
+  node(250, 'approve', 'waiting', 'Waiting for your approval')
   log(100, 'approve', 'Pipeline paused: review the AWS changes')
   out.push({ d: 100, ev: { type: 'approval', request: { actions } } })
   // --- the mock pauses here until approve() is called ---
-  node(100, 'approve', 'success', 'Approved by you')
+  node(100, 'approve', 'success', 'Approved')
 
   node(200, 'ecr', 'running', 'Pushing image')
-  log(300, 'ecr', `Created repository 172083944099.dkr.ecr.${region}.amazonaws.com/${name}`)
-  log(800, 'ecr', 'Pushed 5 layers (58.2 MB compressed)')
-  node(150, 'ecr', 'success', `Pushed ${name}:3f2c1a9`)
+  log(300, 'ecr', `Created ECR repository ${ecrRepo}`)
+  log(300, 'ecr', `Tagged ${localTag} as ${repoUri}:${runId}; pushing...`)
+  log(800, 'ecr', '5 layers pushed')
+  node(150, 'ecr', 'success', `Pushed ${ecrRepo.split('/').pop()}:${runId}`)
 
-  node(200, 'securityGroup', 'running', 'Creating security group')
-  log(500, 'securityGroup', `Created sg-0a91c4e27b3d55f10, inbound ${ports.join(', ')} from 0.0.0.0/0`)
-  node(100, 'securityGroup', 'success', `Ports ${ports.join(', ')} open`)
+  node(200, 'securityGroup', 'running', `Creating builddoctor-${runId}`)
+  log(500, 'securityGroup', `Created security group ${MOCK_SG} in vpc-07c1d2e3f4a5b6c7d`)
+  if (cfg.aws.openPorts.includes(22)) log(50, 'securityGroup', 'Skipping port 22: SSH is not opened, the instance is managed via SSM')
+  log(100, 'securityGroup', `Inbound open: ${ports.map((p) => `tcp/${p}`).join(', ')} from 0.0.0.0/0`)
+  node(100, 'securityGroup', 'success', `Created ${MOCK_SG}`)
 
   node(200, 'ec2', 'running', `Launching ${size}`)
-  log(400, 'ec2', `RunInstances ${size} ami-al2023-arm64 in ${region}a`)
-  log(1200, 'ec2', 'Instance i-0f3b2c9e71a4d8c55 is pending')
-  log(1000, 'ec2', `Instance running, public IP ${ip}`)
-  node(150, 'ec2', 'success', `i-0f3b2c9e71a4 at ${ip}`)
+  log(300, 'ec2', 'Reusing IAM role BuildDoctorEC2Role')
+  log(300, 'ec2', 'AMI ami-0d1e2f3a4b5c6d7e8 (Amazon Linux 2023 arm64)')
+  log(400, 'ec2', `Launched ${MOCK_INSTANCE} (${size})`)
+  log(1200, 'ec2', `Instance running at ${ip}`)
+  log(300, 'ec2', 'Waiting for the SSM agent to come online...')
+  log(900, 'ec2', 'SSM agent online')
+  node(150, 'ec2', 'success', `${MOCK_INSTANCE} @ ${ip}`)
 
   node(200, 'deploy', 'running', 'Starting container on the instance')
-  log(600, 'deploy', 'SSM: docker login to ECR, ok')
-  log(800, 'deploy', `SSM: docker run -d --restart unless-stopped -p ${port}:${port} ${name}:3f2c1a9`)
-  node(150, 'deploy', 'success', `Container up on :${port}`)
+  if (envCount) log(300, 'deploy', `Stored ${envCount} env var(s) as SSM SecureStrings: ${Object.keys(cfg.env ?? {}).join(', ')}`)
+  log(400, 'deploy', `Deploying ${ecrRepo.split('/').pop()}:${runId} to ${MOCK_INSTANCE} on port ${port}`)
+  log(800, 'deploy', 'Login Succeeded')
+  node(150, 'deploy', 'success', `Container 'app' started on :${port}`)
 
-  node(200, 'health', 'running', `Probing ${appUrl}`)
-  log(700, 'health', `GET ${appUrl}/  ->  200 OK in 88 ms (1/3)`)
-  log(400, 'health', `GET ${appUrl}/  ->  200 OK in 74 ms (2/3)`)
-  log(400, 'health', `ok GET ${appUrl}/  ->  200 OK in 71 ms (3/3)`)
-  node(150, 'health', 'success', '3 of 3 checks passed')
+  node(200, 'health', 'running', `Checking ${appUrl}`)
+  log(300, 'health', `Checking ${appUrl}`)
+  log(900, 'health', 'Healthy: HTTP 200')
+  node(150, 'health', 'success', 'Live: HTTP 200')
 
-  node(200, 'dashboard', 'skipped', 'Off. Turn it on from the live card')
+  node(150, 'dashboard', 'running')
+  log(100, 'dashboard', `Monitoring dashboard (cAdvisor metrics :${DASHBOARD_PORTS.metrics}, Dozzle logs :${DASHBOARD_PORTS.logs}) is available but off.`)
+  log(50, 'dashboard', 'Enabling it opens those ports to your current public IP only.')
+  output(0, 'dashboard', { enabled: false, available: true, ports: DASHBOARD_PORTS })
+  node(100, 'dashboard', 'success', 'Dashboard available (off)')
   out.push({ d: 200, ev: { type: 'done', status: 'live', appUrl } })
   return out
 }
@@ -215,7 +246,29 @@ export function createMockBackend(opts: MockOptions): Backend {
   let timer: number | undefined
   let emit: ((ev: RunEvent) => void) | undefined
   let pausedForApproval = false
-  let ip = '13.233.41.20'
+  let runId = ''
+  let dashboardOn = false
+  let tornDown = false
+  const ip = MOCK_IP
+
+  /** Mirrors what the server records in outputs.created as each AWS step succeeds. */
+  const created = (): DeployOutputs['created'] => {
+    if (tornDown) return []
+    const done = new Set(
+      entries.slice(0, idx).flatMap((e) => (e.ev.type === 'node' && e.ev.status === 'success' ? [e.ev.node] : [])),
+    )
+    const list: DeployOutputs['created'] = []
+    if (done.has('ecr')) list.push({ type: 'ecr', id: `builddoctor/${repoSlug(cfg.repoUrl)}` })
+    if (done.has('securityGroup') && !cfg.aws.existingSecurityGroupId) list.push({ type: 'sg', id: MOCK_SG })
+    if (done.has('securityGroup') && cfg.aws.existingSecurityGroupId)
+      list.push({ type: 'sg-rule', id: `${cfg.aws.existingSecurityGroupId}:${cfg.appPort || 3000}:0.0.0.0/0` })
+    if (done.has('ec2') && !cfg.aws.existingInstanceId) list.push({ type: 'ec2', id: MOCK_INSTANCE })
+    if (dashboardOn && cfg.aws.existingSecurityGroupId) {
+      for (const p of [DASHBOARD_PORTS.metrics, DASHBOARD_PORTS.logs])
+        list.push({ type: 'sg-rule', id: `${cfg.aws.existingSecurityGroupId}:${p}:${CALLER_CIDR}` })
+    }
+    return list
+  }
 
   const toEvent = (e: Entry): RunEvent =>
     e.ev.type === 'log' ? { ...e.ev, ts: Date.now() } : (e.ev as RunEvent)
@@ -245,11 +298,13 @@ export function createMockBackend(opts: MockOptions): Backend {
       ),
     async start(c) {
       cfg = c
-      entries = script(cfg)
-      ip = '13.233.41.20'
+      runId = Array.from({ length: 10 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]).join('')
+      entries = script(cfg, runId)
       idx = 0
       pausedForApproval = false
-      return 'demo-' + Math.random().toString(36).slice(2, 8)
+      dashboardOn = false
+      tornDown = false
+      return runId
     },
     subscribe(_id, onEvent) {
       emit = onEvent
@@ -295,29 +350,50 @@ export function createMockBackend(opts: MockOptions): Backend {
         })
       }
     },
+    async getRun(id) {
+      const state = {
+        id,
+        config: cfg,
+        outputs: {
+          created: created(),
+          instanceId: cfg.aws.existingInstanceId ?? MOCK_INSTANCE,
+          securityGroupId: cfg.aws.existingSecurityGroupId ?? MOCK_SG,
+          publicIp: ip,
+        },
+        status: tornDown ? 'torn-down' : 'live',
+        createdAt: Date.now(),
+      }
+      return state as unknown as RunState
+    },
+    // Like the server's setDashboard(): no pipeline events, just the new dashboard state.
     async dashboard(_id, enabled) {
       await new Promise((r) => setTimeout(r, 600))
-      emit?.({
-        type: 'node',
-        node: 'dashboard',
-        status: enabled ? 'success' : 'skipped',
-        summary: enabled ? 'Metrics and logs running' : 'Off. Turn it on from the live card',
-      })
-      emit?.({
-        type: 'log',
-        node: 'dashboard',
-        line: enabled ? 'SSM: started cadvisor on :8080 and dozzle on :9999' : 'SSM: stopped cadvisor and dozzle',
-        ts: Date.now(),
-      })
+      dashboardOn = enabled
       return enabled
-        ? { enabled: true, metricsUrl: `http://${ip}:8080`, logsUrl: `http://${ip}:9999` }
+        ? { enabled: true, metricsUrl: `http://${ip}:${DASHBOARD_PORTS.metrics}/`, logsUrl: `http://${ip}:${DASHBOARD_PORTS.logs}/` }
         : { enabled: false }
     },
+    // Same result lines as server/src/aws/teardown.ts.
     async teardown() {
       await new Promise((r) => setTimeout(r, 900))
-      return {
-        deleted: ['i-0f3b2c9e71a4d8c55', 'sg-0a91c4e27b3d55f10', `ecr/${cfg.repoUrl.split('/').pop() || 'app'}`, '/builddoctor/env/*'],
+      const repo = `builddoctor/${repoSlug(cfg.repoUrl)}`
+      const lines: string[] = []
+      const c = created()
+      if (c.some((x) => x.type === 'ec2')) lines.push(`EC2 instance ${MOCK_INSTANCE} terminated`)
+      else if (cfg.aws.existingInstanceId) lines.push(`Kept pre-existing instance ${cfg.aws.existingInstanceId} (the 'app' container keeps running)`)
+      if (c.some((x) => x.type === 'sg')) lines.push(`Security group ${MOCK_SG} deleted`)
+      for (const r of c.filter((x) => x.type === 'sg-rule')) {
+        const [g, p, cidr] = r.id.split(':')
+        lines.push(`Revoked inbound tcp/${p} from ${cidr} on your security group ${g}`)
       }
+      if (cfg.aws.existingSecurityGroupId) lines.push(`Kept pre-existing security group ${cfg.aws.existingSecurityGroupId}`)
+      if (c.some((x) => x.type === 'ecr')) lines.push(`ECR image ${repo}:${runId} deleted; empty ECR repository ${repo} deleted`)
+      const envCount = Object.keys(cfg.env ?? {}).length
+      if (envCount) lines.push(`${envCount} SSM env parameter(s) deleted`)
+      if (!cfg.aws.existingInstanceId) lines.push('Kept shared IAM role/instance profile BuildDoctorEC2Role (reused by other runs)')
+      tornDown = true
+      dashboardOn = false
+      return { deleted: lines }
     },
   }
 }
