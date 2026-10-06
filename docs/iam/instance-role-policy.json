@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SsmAgent",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssm:ListAssociations",
+        "ssm:ListInstanceAssociations",
+        "ssm:DescribeAssociation",
+        "ssm:GetDocument",
+        "ssm:DescribeDocument",
+        "ssm:UpdateInstanceAssociationStatus",
+        "ssm:PutInventory",
+        "ssmmessages:*",
+        "ec2messages:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BuildDoctorParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:*:*:parameter/builddoctor/*"
+    }
+  ]
+}

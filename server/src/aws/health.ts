@@ -69,7 +69,7 @@ export const healthStep: Step = {
         const sg = await describeSg(region, securityGroupId);
         if (!portOpenToWorld(sg, port)) {
           ctx.log(`Security group ${securityGroupId} does not allow tcp/${port}; adding it`);
-          await authorizePorts(region, securityGroupId, [port], '0.0.0.0/0', 'BuildDoctor app port');
+          await authorizePorts(region, securityGroupId, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
           const diagnosis: Diagnosis = {
             rootCause: `Security group ${securityGroupId} blocked inbound tcp/${port}`,
             evidence: `No ingress rule covering port ${port} from 0.0.0.0/0`,

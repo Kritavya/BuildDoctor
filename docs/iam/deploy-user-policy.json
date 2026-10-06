@@ -1,0 +1,154 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Ec2Read",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeVpcs", "ec2:DescribeSecurityGroups", "ec2:DescribeInstances"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Ec2CreateSecurityGroupTagged",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:*:*:security-group/*",
+      "Condition": { "StringEquals": { "aws:RequestTag/Project": "BuildDoctor" } }
+    },
+    {
+      "Sid": "Ec2CreateSecurityGroupInVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:*:*:vpc/*"
+    },
+    {
+      "Sid": "Ec2Ingress",
+      "Effect": "Allow",
+      "Action": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"],
+      "Resource": "arn:aws:ec2:*:*:security-group/*"
+    },
+    {
+      "Sid": "Ec2RunTaggedInstances",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*"],
+      "Condition": { "StringEquals": { "aws:RequestTag/Project": "BuildDoctor" } }
+    },
+    {
+      "Sid": "Ec2RunInstancesSupportingResources",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:*::image/*",
+        "arn:aws:ec2:*:*:subnet/*",
+        "arn:aws:ec2:*:*:network-interface/*",
+        "arn:aws:ec2:*:*:security-group/*"
+      ]
+    },
+    {
+      "Sid": "Ec2TagOnCreateOnly",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "ec2:CreateAction": ["RunInstances", "CreateSecurityGroup"] } }
+    },
+    {
+      "Sid": "Ec2DestroyOnlyBuildDoctor",
+      "Effect": "Allow",
+      "Action": ["ec2:TerminateInstances", "ec2:DeleteSecurityGroup"],
+      "Resource": ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:security-group/*"],
+      "Condition": { "StringEquals": { "ec2:ResourceTag/Project": "BuildDoctor" } }
+    },
+    {
+      "Sid": "Ec2AttachSgToExistingInstance",
+      "Effect": "Allow",
+      "Action": "ec2:ModifyInstanceAttribute",
+      "Resource": ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:security-group/*"]
+    },
+    {
+      "Sid": "EcrAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcrBuildDoctorRepos",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:DescribeRepositories",
+        "ecr:CreateRepository",
+        "ecr:TagResource",
+        "ecr:DeleteRepository",
+        "ecr:ListImages",
+        "ecr:BatchDeleteImage",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage"
+      ],
+      "Resource": "arn:aws:ecr:*:*:repository/builddoctor/*"
+    },
+    {
+      "Sid": "IamInstanceRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:CreateRole",
+        "iam:TagRole",
+        "iam:PutRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::*:role/BuildDoctorEC2Role"
+    },
+    {
+      "Sid": "IamAttachOnlyEcrReadOnly",
+      "Effect": "Allow",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:aws:iam::*:role/BuildDoctorEC2Role",
+      "Condition": { "ArnEquals": { "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly" } }
+    },
+    {
+      "Sid": "IamInstanceProfile",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetInstanceProfile",
+        "iam:CreateInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:AddRoleToInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::*:instance-profile/BuildDoctorEC2Role"
+    },
+    {
+      "Sid": "IamPassRoleToEc2",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/BuildDoctorEC2Role",
+      "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+    },
+    {
+      "Sid": "SsmAmiLookup",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"
+    },
+    {
+      "Sid": "SsmEnvParameters",
+      "Effect": "Allow",
+      "Action": ["ssm:PutParameter", "ssm:DeleteParameters", "ssm:AddTagsToResource"],
+      "Resource": "arn:aws:ssm:*:*:parameter/builddoctor/*"
+    },
+    {
+      "Sid": "SsmRunShellScript",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": ["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ec2:*:*:instance/*"]
+    },
+    {
+      "Sid": "SsmRead",
+      "Effect": "Allow",
+      "Action": ["ssm:DescribeInstanceInformation", "ssm:GetCommandInvocation"],
+      "Resource": "*"
+    }
+  ]
+}

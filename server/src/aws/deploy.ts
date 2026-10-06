@@ -13,7 +13,7 @@ export function envParamPrefix(runId: string): string {
 
 // Env values travel as SSM SecureStrings (default aws/ssm key) and are fetched on the
 // instance, so they never appear in SendCommand parameters, command history or our logs.
-// The instance role's AmazonSSMManagedInstanceCore policy already allows ssm:GetParameter.
+// The instance role may read only parameters under /builddoctor/* (see INSTANCE_ROLE_POLICY).
 // Empty values are not stored (SSM rejects them) and are written as NAME= directly.
 async function storeEnv(run: RunState): Promise<{ stored: string[]; empty: string[] }> {
   const env = run.config.env ?? {};

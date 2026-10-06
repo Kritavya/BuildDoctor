@@ -80,7 +80,8 @@ export interface DeployOutputs {
   publicIp?: string;
   appUrl?: string;
   dashboard?: { enabled: boolean; metricsUrl?: string; logsUrl?: string };
-  created: Array<{ type: 'ecr' | 'sg' | 'ec2' | 'iam-role' | 'instance-profile'; id: string }>; // for teardown
+  // sg-rule id: <groupId>:<port>:<cidr>, an ingress rule we added to a pre-existing security group.
+  created: Array<{ type: 'ecr' | 'sg' | 'sg-rule' | 'ec2' | 'iam-role' | 'instance-profile'; id: string }>; // for teardown
 }
 
 // Server -> UI over SSE at GET /api/runs/:id/events

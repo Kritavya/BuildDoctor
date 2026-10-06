@@ -4,8 +4,9 @@ import { runShell } from './ssm.js';
 import { authorizePorts, revokeTagged } from './network.js';
 import { DASHBOARD_PORTS, DASHBOARD_RULE_DESC } from './util.js';
 
-const CADVISOR_IMAGE = 'gcr.io/cadvisor/cadvisor:v0.49.1'; // multi-arch (arm64)
-const DOZZLE_IMAGE = 'amir20/dozzle:latest';
+// Both manifests list amd64 + arm64 (checked against the registries).
+export const CADVISOR_IMAGE = 'gcr.io/cadvisor/cadvisor:v0.55.1';
+export const DOZZLE_IMAGE = 'amir20/dozzle:v11.3.0';
 const PORTS = [DASHBOARD_PORTS.metrics, DASHBOARD_PORTS.logs];
 
 export const START_SCRIPT = [
@@ -43,8 +44,8 @@ export async function setDashboard(run: RunState, enabled: boolean): Promise<Dep
     const cidr = await callerCidr();
     const res = await runShell(region, instanceId, START_SCRIPT, { comment: `BuildDoctor dashboard on ${run.id}` });
     if (res.status !== 'Success') throw new Error(`Starting dashboard containers failed: ${(res.stderr || res.stdout).trim().slice(-500)}`);
-    await revokeTagged(region, securityGroupId, PORTS, DASHBOARD_RULE_DESC, cidr);
-    await authorizePorts(region, securityGroupId, PORTS, cidr, DASHBOARD_RULE_DESC);
+    await revokeTagged(region, securityGroupId, PORTS, DASHBOARD_RULE_DESC, cidr, run);
+    await authorizePorts(region, securityGroupId, PORTS, cidr, DASHBOARD_RULE_DESC, run);
     run.outputs.dashboard = {
       enabled: true,
       metricsUrl: `http://${publicIp}:${DASHBOARD_PORTS.metrics}/`,
@@ -53,7 +54,7 @@ export async function setDashboard(run: RunState, enabled: boolean): Promise<Dep
   } else {
     const res = await runShell(region, instanceId, STOP_SCRIPT, { comment: `BuildDoctor dashboard off ${run.id}` });
     if (res.status !== 'Success') throw new Error(`Stopping dashboard containers failed: ${(res.stderr || res.stdout).trim().slice(-500)}`);
-    await revokeTagged(region, securityGroupId, PORTS, DASHBOARD_RULE_DESC);
+    await revokeTagged(region, securityGroupId, PORTS, DASHBOARD_RULE_DESC, undefined, run);
     run.outputs.dashboard = { enabled: false };
   }
   return run.outputs.dashboard;

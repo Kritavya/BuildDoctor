@@ -9,8 +9,11 @@ import {
   AttachRolePolicyCommand,
   CreateInstanceProfileCommand,
   CreateRoleCommand,
+  DetachRolePolicyCommand,
   GetInstanceProfileCommand,
   GetRoleCommand,
+  ListAttachedRolePoliciesCommand,
+  PutRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import { DescribeInstanceInformationCommand, GetParameterCommand } from '@aws-sdk/client-ssm';
 import type { Step, StepContext } from '../pipeline/step.js';
@@ -18,10 +21,34 @@ import { clients } from './clients.js';
 import { ROLE_NAME, errMsg, errName, poll, recordCreated, sleep, tags, timing } from './util.js';
 
 const AMI_PARAM = '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64';
-const MANAGED_POLICIES = [
-  'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore',
-  'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly',
-];
+const ECR_READ_ONLY = 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly';
+// Earlier versions attached this; it allows ssm:GetParameter(s) on every parameter in the account.
+const SSM_CORE = 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore';
+export const INSTANCE_POLICY_NAME = 'BuildDoctorInstance';
+
+// SSM agent essentials + parameter reads limited to /builddoctor/* (deploy env vars).
+// Mirrored in docs/iam/instance-role-policy.json.
+export const INSTANCE_ROLE_POLICY = {
+  Version: '2012-10-17',
+  Statement: [
+    {
+      Sid: 'SsmAgent',
+      Effect: 'Allow',
+      Action: [
+        'ssm:UpdateInstanceInformation', 'ssm:ListAssociations', 'ssm:ListInstanceAssociations', 'ssm:DescribeAssociation',
+        'ssm:GetDocument', 'ssm:DescribeDocument', 'ssm:UpdateInstanceAssociationStatus', 'ssm:PutInventory',
+        'ssmmessages:*', 'ec2messages:*',
+      ],
+      Resource: '*',
+    },
+    {
+      Sid: 'BuildDoctorParameters',
+      Effect: 'Allow',
+      Action: ['ssm:GetParameter', 'ssm:GetParameters'],
+      Resource: 'arn:aws:ssm:*:*:parameter/builddoctor/*',
+    },
+  ],
+};
 
 // AL2023 ships the SSM agent and AWS CLI; only Docker is added.
 export const USER_DATA = `#!/bin/bash
@@ -52,8 +79,18 @@ export async function ensureInstanceProfile(ctx: StepContext): Promise<string> {
     recordCreated(run, 'iam-role', ROLE_NAME);
     ctx.log(`Created IAM role ${ROLE_NAME}`);
   }
-  // Attach is idempotent.
-  for (const arn of MANAGED_POLICIES) await iam.send(new AttachRolePolicyCommand({ RoleName: ROLE_NAME, PolicyArn: arn }));
+  // Converge the role on every run: least-privilege inline policy, ECR read-only, no SSM core.
+  await iam.send(new PutRolePolicyCommand({
+    RoleName: ROLE_NAME, PolicyName: INSTANCE_POLICY_NAME, PolicyDocument: JSON.stringify(INSTANCE_ROLE_POLICY),
+  }));
+  const attached = (await iam.send(new ListAttachedRolePoliciesCommand({ RoleName: ROLE_NAME }))).AttachedPolicies ?? [];
+  if (attached.some((p) => p.PolicyArn === SSM_CORE)) {
+    await iam.send(new DetachRolePolicyCommand({ RoleName: ROLE_NAME, PolicyArn: SSM_CORE }));
+    ctx.log(`Detached AmazonSSMManagedInstanceCore from ${ROLE_NAME} (replaced by a scoped inline policy)`);
+  }
+  if (!attached.some((p) => p.PolicyArn === ECR_READ_ONLY)) {
+    await iam.send(new AttachRolePolicyCommand({ RoleName: ROLE_NAME, PolicyArn: ECR_READ_ONLY }));
+  }
 
   let roles: string[] = [];
   try {
@@ -106,7 +143,7 @@ async function useExisting(ctx: StepContext, instanceId: string) {
   if (inst.State?.Name !== 'running') problems.push(`state is ${inst.State?.Name}, expected running`);
   if (inst.Architecture !== 'arm64') problems.push(`architecture is ${inst.Architecture}; images are built for arm64 (use a t4g/Graviton instance)`);
   if (!inst.PublicIpAddress) problems.push('it has no public IP address');
-  if (!(await ssmOnline(region, instanceId))) problems.push('it is not SSM-managed/online (needs the SSM agent and an instance profile with AmazonSSMManagedInstanceCore)');
+  if (!(await ssmOnline(region, instanceId))) problems.push('it is not SSM-managed/online (needs the SSM agent and an instance profile allowing it to register with SSM)');
   if (problems.length) throw new Error(`Instance ${instanceId} unusable: ${problems.join('; ')}`);
 
   // Our security group must be attached for the app port to be reachable.

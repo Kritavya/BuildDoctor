@@ -4,7 +4,8 @@ import {
   AuthorizeSecurityGroupIngressCommand, DeleteSecurityGroupCommand, DescribeInstancesCommand,
   DescribeSecurityGroupsCommand, EC2Client, RevokeSecurityGroupIngressCommand, TerminateInstancesCommand,
 } from '@aws-sdk/client-ec2';
-import { BatchDeleteImageCommand, DeleteRepositoryCommand, DescribeRepositoriesCommand, ECRClient } from '@aws-sdk/client-ecr';
+import { BatchDeleteImageCommand, DeleteRepositoryCommand, ECRClient, ListImagesCommand } from '@aws-sdk/client-ecr';
+import { CADVISOR_IMAGE, DOZZLE_IMAGE } from '../../src/aws/dashboard.js';
 import {
   DeleteParametersCommand, GetCommandInvocationCommand, PutParameterCommand, SendCommandCommand, SSMClient,
 } from '@aws-sdk/client-ssm';
@@ -158,9 +159,15 @@ describe('dashboard', () => {
     expect(out).toEqual({ enabled: true, metricsUrl: 'http://1.2.3.4:18080/', logsUrl: 'http://1.2.3.4:18081/' });
     const script = ssm.commandCalls(SendCommandCommand)[0].args[0].input.Parameters!.commands[0];
     expect(script).toContain('/var/run/docker.sock:/var/run/docker.sock:ro');
-    expect(script).toContain('gcr.io/cadvisor/cadvisor');
+    expect(script).toContain(CADVISOR_IMAGE);
+    expect(script).toContain(DOZZLE_IMAGE);
+    expect(DOZZLE_IMAGE).not.toMatch(/:latest$/);
     const cidrs = ec2.commandCalls(AuthorizeSecurityGroupIngressCommand).map((c) => c.args[0].input.IpPermissions![0].IpRanges![0].CidrIp);
     expect(cidrs).toEqual(['203.0.113.7/32', '203.0.113.7/32']);
+    // sg-1 is pre-existing here, so the new dashboard rules are tracked for teardown.
+    expect(run.outputs.created).toEqual([
+      { type: 'sg-rule', id: 'sg-1:18080:203.0.113.7/32' }, { type: 'sg-rule', id: 'sg-1:18081:203.0.113.7/32' },
+    ]);
     expect(ec2).toHaveReceivedCommandWith(RevokeSecurityGroupIngressCommand, {
       IpPermissions: [{ IpProtocol: 'tcp', FromPort: 18080, ToPort: 18080, IpRanges: [{ CidrIp: '198.51.100.1/32', Description: 'BuildDoctor dashboard' }] }],
     });
@@ -196,6 +203,8 @@ describe('teardown', () => {
     ec2.on(TerminateInstancesCommand).resolves({});
     ec2.on(DescribeSecurityGroupsCommand).resolves({ SecurityGroups: [{ GroupId: 'sg-1', Tags: tagged }] });
     ec2.on(DeleteSecurityGroupCommand).rejectsOnce(awsErr('DependencyViolation')).resolves({});
+    ecr.on(BatchDeleteImageCommand).resolves({});
+    ecr.on(ListImagesCommand).resolves({ imageIds: [] });
     ecr.on(DeleteRepositoryCommand).resolves({});
     ssm.on(DeleteParametersCommand).resolves({ DeletedParameters: ['/builddoctor/run123/env/DB_PASSWORD'] });
 
@@ -203,13 +212,45 @@ describe('teardown', () => {
     expect(out).toEqual([
       'EC2 instance i-1 terminated',
       'Security group sg-1 deleted',
-      'ECR repository builddoctor/my_app deleted (with images)',
+      'ECR image builddoctor/my_app:run123 deleted; empty ECR repository builddoctor/my_app deleted',
       '1 SSM env parameter(s) deleted',
       'Kept shared IAM role/instance profile BuildDoctorEC2Role (reused by other runs)',
     ]);
     expect(ec2).toHaveReceivedCommandWith(TerminateInstancesCommand, { InstanceIds: ['i-1'] });
     expect(ec2).toHaveReceivedCommandTimes(DeleteSecurityGroupCommand, 2);
-    expect(ecr).toHaveReceivedCommandWith(DeleteRepositoryCommand, { repositoryName: 'builddoctor/my_app', force: true });
+    expect(ecr).toHaveReceivedCommandWith(BatchDeleteImageCommand, { repositoryName: 'builddoctor/my_app', imageIds: [{ imageTag: 'run123' }] });
+    expect(ecr.commandCalls(DeleteRepositoryCommand)[0].args[0].input).toEqual({ repositoryName: 'builddoctor/my_app' });
+    expect(run.outputs.created.map((c) => c.type)).not.toContain('ecr');
+  });
+
+  it('keeps a created repo that still holds other runs\' images', async () => {
+    const run = deployedRun();
+    run.config.env = {};
+    run.outputs.instanceId = undefined;
+    run.outputs.securityGroupId = undefined;
+    run.outputs.created = [{ type: 'ecr', id: 'builddoctor/my_app' }];
+    ecr.on(BatchDeleteImageCommand).resolves({});
+    ecr.on(ListImagesCommand).resolves({ imageIds: [{ imageTag: 'otherrun' }] });
+    const out = await teardown(run);
+    expect(ecr).not.toHaveReceivedCommand(DeleteRepositoryCommand);
+    expect(out[0]).toMatch(/kept \(still holds images/);
+  });
+
+  it('revokes rules recorded on a pre-existing security group', async () => {
+    const run = deployedRun();
+    run.config.env = {};
+    run.outputs.ecrRepoUri = undefined;
+    run.config.aws.existingSecurityGroupId = 'sg-1';
+    run.outputs.created = [{ type: 'ec2', id: 'i-1' }, { type: 'sg-rule', id: 'sg-1:3000:0.0.0.0/0' }];
+    ec2.on(DescribeInstancesCommand).resolves({ Reservations: [{ Instances: [{ InstanceId: 'i-1', State: { Name: 'terminated' } }] }] });
+    ec2.on(RevokeSecurityGroupIngressCommand).resolves({});
+    const out = await teardown(run);
+    expect(ec2).toHaveReceivedCommandWith(RevokeSecurityGroupIngressCommand, {
+      GroupId: 'sg-1', IpPermissions: [{ IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, IpRanges: [{ CidrIp: '0.0.0.0/0' }] }],
+    });
+    expect(ec2).not.toHaveReceivedCommand(DeleteSecurityGroupCommand);
+    expect(out).toContain('Revoked inbound tcp/3000 from 0.0.0.0/0 on your security group sg-1');
+    expect(run.outputs.created.some((c) => c.type === 'sg-rule')).toBe(false);
   });
 
   it('never deletes pre-existing resources', async () => {
@@ -217,7 +258,6 @@ describe('teardown', () => {
     run.config.env = {};
     run.config.aws.existingInstanceId = 'i-1';
     run.config.aws.existingSecurityGroupId = 'sg-1';
-    ecr.on(DescribeRepositoriesCommand).resolves({ repositories: [{}] });
     ecr.on(BatchDeleteImageCommand).resolves({});
     const out = await teardown(run);
     expect(ec2).not.toHaveReceivedCommand(TerminateInstancesCommand);

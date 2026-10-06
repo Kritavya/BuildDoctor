@@ -1,16 +1,19 @@
 import {
   DeleteSecurityGroupCommand,
   ModifyInstanceAttributeCommand,
+  RevokeSecurityGroupIngressCommand,
   TerminateInstancesCommand,
 } from '@aws-sdk/client-ec2';
-import { BatchDeleteImageCommand, DeleteRepositoryCommand, DescribeRepositoriesCommand } from '@aws-sdk/client-ecr';
+import { BatchDeleteImageCommand, DeleteRepositoryCommand, ListImagesCommand } from '@aws-sdk/client-ecr';
 import type { RunState } from '../types.js';
 import { clients } from './clients.js';
 import { describeInstance } from './ec2.js';
 import { describeSg } from './network.js';
 import { deleteEnvParams } from './deploy.js';
 import { setDashboard } from './dashboard.js';
-import { ROLE_NAME, errMsg, errName, hasRunTag, poll, sleep, timing, wasCreated } from './util.js';
+import {
+  ROLE_NAME, errMsg, errName, forgetCreated, hasRunTag, parseSgRuleId, poll, sleep, timing, wasCreated,
+} from './util.js';
 
 // Deletes only what this run recorded in outputs.created, after re-checking the run tags.
 // Shared IAM role/profile are always kept. Returns one human-readable line per resource.
@@ -84,27 +87,49 @@ export async function teardown(run: RunState): Promise<string[]> {
         }
       }
     });
-  } else if (securityGroupId && !wasCreated(run, 'sg', securityGroupId)) {
-    out.push(`Kept pre-existing security group ${securityGroupId} (rules added by BuildDoctor remain)`);
   }
 
-  const repo = run.outputs.ecrRepoUri?.split('/').slice(1).join('/');
-  if (repo && wasCreated(run, 'ecr', repo)) {
-    await attempt(`delete ECR ${repo}`, async () => {
+  // Ingress rules we added to security groups we did not create.
+  for (const rule of run.outputs.created.filter((c) => c.type === 'sg-rule')) {
+    const { groupId, port, cidr } = parseSgRuleId(rule.id);
+    await attempt(`revoke ${groupId} tcp/${port} from ${cidr}`, async () => {
       try {
-        await ecr.send(new DeleteRepositoryCommand({ repositoryName: repo, force: true }));
+        await ec2.send(new RevokeSecurityGroupIngressCommand({
+          GroupId: groupId,
+          IpPermissions: [{ IpProtocol: 'tcp', FromPort: port, ToPort: port, IpRanges: [{ CidrIp: cidr }] }],
+        }));
+      } catch (e) {
+        if (errName(e) !== 'InvalidPermission.NotFound' && errName(e) !== 'InvalidGroup.NotFound') throw e;
+      }
+      forgetCreated(run, 'sg-rule', rule.id);
+      return `Revoked inbound tcp/${port} from ${cidr} on your security group ${groupId}`;
+    });
+  }
+  if (securityGroupId && !wasCreated(run, 'sg', securityGroupId)) out.push(`Kept pre-existing security group ${securityGroupId}`);
+
+  // ECR: always drop this run's tag; the repo goes only if we created it and it is now empty.
+  const repo = run.outputs.ecrRepoUri?.split('/').slice(1).join('/');
+  if (repo) {
+    await attempt(`clean up ECR ${repo}`, async () => {
+      try {
+        await ecr.send(new BatchDeleteImageCommand({ repositoryName: repo, imageIds: [{ imageTag: run.id }] }));
       } catch (e) {
         if (errName(e) === 'RepositoryNotFoundException') return `ECR repository ${repo} (already deleted)`;
         throw e;
       }
-      return `ECR repository ${repo} deleted (with images)`;
-    });
-  } else if (repo) {
-    // Shared repo from an earlier run: remove only this run's image tag.
-    await attempt(`delete image ${repo}:${run.id}`, async () => {
-      await ecr.send(new DescribeRepositoriesCommand({ repositoryNames: [repo] }));
-      await ecr.send(new BatchDeleteImageCommand({ repositoryName: repo, imageIds: [{ imageTag: run.id }] }));
-      return `ECR image ${repo}:${run.id} deleted (repository kept)`;
+      const msg = `ECR image ${repo}:${run.id} deleted`;
+      if (!wasCreated(run, 'ecr', repo)) return `${msg} (pre-existing repository kept)`;
+      const left = (await ecr.send(new ListImagesCommand({ repositoryName: repo, maxResults: 1 }))).imageIds ?? [];
+      if (left.length) return `${msg}; repository ${repo} kept (still holds images from other runs)`;
+      try {
+        // No force: if another run pushed meanwhile, the repo is kept.
+        await ecr.send(new DeleteRepositoryCommand({ repositoryName: repo }));
+      } catch (e) {
+        if (errName(e) === 'RepositoryNotEmptyException') return `${msg}; repository ${repo} kept (not empty)`;
+        throw e;
+      }
+      forgetCreated(run, 'ecr', repo);
+      return `${msg}; empty ECR repository ${repo} deleted`;
     });
   }
 

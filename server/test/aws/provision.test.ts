@@ -7,8 +7,10 @@ import {
 import { CreateRepositoryCommand, DescribeRepositoriesCommand, ECRClient, GetAuthorizationTokenCommand } from '@aws-sdk/client-ecr';
 import {
   AddRoleToInstanceProfileCommand, AttachRolePolicyCommand, CreateInstanceProfileCommand, CreateRoleCommand,
-  GetInstanceProfileCommand, GetRoleCommand, IAMClient,
+  DetachRolePolicyCommand, GetInstanceProfileCommand, GetRoleCommand, IAMClient, ListAttachedRolePoliciesCommand, PutRolePolicyCommand,
 } from '@aws-sdk/client-iam';
+import { readFileSync } from 'node:fs';
+import { INSTANCE_ROLE_POLICY } from '../../src/aws/ec2.js';
 import { DescribeInstanceInformationCommand, GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { awsSteps } from '../../src/aws/steps.js';
 import { dockerFactory } from '../../src/aws/ecr.js';
@@ -33,6 +35,26 @@ describe('awsSteps', () => {
   it('sanitizes repo names', () => {
     expect(repoSlug('https://github.com/acme/My_App.git')).toBe('my_app');
     expect(repoSlug('git@github.com:acme/--Weird Name!!.git')).toBe('weird-name');
+  });
+});
+
+describe('iam policy docs', () => {
+  const doc = (f: string) => JSON.parse(readFileSync(new URL(`../../../docs/iam/${f}`, import.meta.url), 'utf8'));
+  it('instance-role-policy.json matches the policy the code applies', () => {
+    expect(doc('instance-role-policy.json')).toEqual(INSTANCE_ROLE_POLICY);
+  });
+  it('instance policy scopes parameter reads to /builddoctor/*', () => {
+    const reads = INSTANCE_ROLE_POLICY.Statement.filter((s) => s.Action.some((a) => a.startsWith('ssm:GetParameter')));
+    expect(reads.map((s) => s.Resource)).toEqual(['arn:aws:ssm:*:*:parameter/builddoctor/*']);
+  });
+  it('deploy-user policy never grants iam/ecr/ssm-write on wildcard resources', () => {
+    for (const s of doc('deploy-user-policy.json').Statement) {
+      const actions = ([] as string[]).concat(s.Action);
+      const resources = ([] as string[]).concat(s.Resource);
+      if (actions.some((a) => a.startsWith('iam:'))) expect(resources.every((r) => /BuildDoctorEC2Role$/.test(r))).toBe(true);
+      if (actions.some((a) => a.startsWith('ecr:') && a !== 'ecr:GetAuthorizationToken')) expect(resources).toEqual(['arn:aws:ecr:*:*:repository/builddoctor/*']);
+      if (actions.some((a) => a === 'ssm:PutParameter' || a === 'ssm:DeleteParameters')) expect(resources).toEqual(['arn:aws:ssm:*:*:parameter/builddoctor/*']);
+    }
   });
 });
 
@@ -119,7 +141,7 @@ describe('securityGroup step', () => {
     expect((await step('securityGroup').run(ctx)).ok).toBe(true);
     expect(ec2).toHaveReceivedCommandTimes(AuthorizeSecurityGroupIngressCommand, 1);
     expect(ec2).not.toHaveReceivedCommand(CreateSecurityGroupCommand);
-    expect(run.outputs.created).toEqual([]);
+    expect(run.outputs.created).toEqual([{ type: 'sg-rule', id: 'sg-old:3000:0.0.0.0/0' }]);
     expect(ctx.lines.join('\n')).toMatch(/Adding inbound rule tcp\/3000/);
   });
 
@@ -135,6 +157,8 @@ describe('ec2 step', () => {
     iam.on(GetRoleCommand).rejects(awsErr('NoSuchEntityException'));
     iam.on(CreateRoleCommand).resolves({});
     iam.on(AttachRolePolicyCommand).resolves({});
+    iam.on(PutRolePolicyCommand).resolves({});
+    iam.on(ListAttachedRolePoliciesCommand).resolves({ AttachedPolicies: [] });
     iam.on(GetInstanceProfileCommand).rejects(awsErr('NoSuchEntityException'));
     iam.on(CreateInstanceProfileCommand).resolves({});
     iam.on(AddRoleToInstanceProfileCommand).resolves({});
@@ -158,14 +182,22 @@ describe('ec2 step', () => {
     expect(ec2).toHaveReceivedCommandWith(RunInstancesCommand, {
       ImageId: 'ami-arm', InstanceType: 't4g.micro', SecurityGroupIds: ['sg-new'], IamInstanceProfile: { Name: 'BuildDoctorEC2Role' },
     });
-    expect(iam).toHaveReceivedCommandTimes(AttachRolePolicyCommand, 2);
+    expect(iam).toHaveReceivedCommandTimes(AttachRolePolicyCommand, 1);
+    expect(iam).toHaveReceivedCommandWith(AttachRolePolicyCommand, { PolicyArn: 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly' });
+    expect(iam).toHaveReceivedCommandWith(PutRolePolicyCommand, { RoleName: 'BuildDoctorEC2Role', PolicyDocument: JSON.stringify(INSTANCE_ROLE_POLICY) });
+    expect(iam).not.toHaveReceivedCommand(DetachRolePolicyCommand);
     expect(run.outputs).toMatchObject({ instanceId: 'i-1', publicIp: '1.2.3.4' });
     expect(run.outputs.created.map((c) => c.type).sort()).toEqual(['ec2', 'iam-role', 'instance-profile']);
   });
 
-  it('reuses role/profile without recording them', async () => {
+  it('reuses role/profile without recording them, migrating off AmazonSSMManagedInstanceCore', async () => {
     iam.on(GetRoleCommand).resolves({});
-    iam.on(AttachRolePolicyCommand).resolves({});
+    iam.on(PutRolePolicyCommand).resolves({});
+    iam.on(DetachRolePolicyCommand).resolves({});
+    iam.on(ListAttachedRolePoliciesCommand).resolves({ AttachedPolicies: [
+      { PolicyArn: 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore' },
+      { PolicyArn: 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly' },
+    ] });
     iam.on(GetInstanceProfileCommand).resolves({ InstanceProfile: { Roles: [{ RoleName: 'BuildDoctorEC2Role' }] } as never });
     ssm.on(GetParameterCommand).resolves({ Parameter: { Value: 'ami-arm' } });
     ec2.on(RunInstancesCommand).resolves({ Instances: [{ InstanceId: 'i-2' }] });
@@ -175,6 +207,9 @@ describe('ec2 step', () => {
     expect((await step('ec2').run(makeCtx(run))).ok).toBe(true);
     expect(iam).not.toHaveReceivedCommand(CreateRoleCommand);
     expect(iam).not.toHaveReceivedCommand(AddRoleToInstanceProfileCommand);
+    expect(iam).toHaveReceivedCommandWith(DetachRolePolicyCommand, { PolicyArn: 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore' });
+    expect(iam).not.toHaveReceivedCommand(AttachRolePolicyCommand);
+    expect(iam).toHaveReceivedCommandTimes(PutRolePolicyCommand, 1);
     expect(run.outputs.created).toEqual([{ type: 'ec2', id: 'i-2' }]);
   });
 

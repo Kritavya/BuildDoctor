@@ -79,6 +79,19 @@ export function recordCreated(run: RunState, type: RunState['outputs']['created'
   if (!run.outputs.created.some((c) => c.type === type && c.id === id)) run.outputs.created.push({ type, id });
 }
 
+export function sgRuleId(groupId: string, port: number, cidr: string): string {
+  return `${groupId}:${port}:${cidr}`;
+}
+
+export function parseSgRuleId(id: string): { groupId: string; port: number; cidr: string } {
+  const [groupId, port, cidr] = id.split(':');
+  return { groupId, port: Number(port), cidr };
+}
+
+export function forgetCreated(run: RunState, type: RunState['outputs']['created'][number]['type'], id: string): void {
+  run.outputs.created = run.outputs.created.filter((c) => !(c.type === type && c.id === id));
+}
+
 export function wasCreated(run: RunState, type: RunState['outputs']['created'][number]['type'], id?: string): boolean {
   return !!id && run.outputs.created.some((c) => c.type === type && c.id === id);
 }
