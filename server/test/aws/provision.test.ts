@@ -134,7 +134,7 @@ describe('securityGroup step', () => {
   });
 
   it('reuses an existing SG and adds the app port when missing', async () => {
-    ec2.on(DescribeSecurityGroupsCommand).resolves({ SecurityGroups: [{ GroupId: 'sg-old', GroupName: 'mine', IpPermissions: [] }] });
+    ec2.on(DescribeSecurityGroupsCommand).resolves({ SecurityGroups: [{ GroupId: 'sg-old', GroupName: 'mine', IpPermissions: [], Tags: [{ Key: 'Project', Value: 'BuildDoctor' }] }] });
     ec2.on(AuthorizeSecurityGroupIngressCommand).resolves({});
     const run = makeRun({}, { existingSecurityGroupId: 'sg-old' });
     const ctx = makeCtx(run);
@@ -222,7 +222,7 @@ describe('ec2 step', () => {
   });
 
   it('accepts an existing arm64 SSM instance and attaches our SG', async () => {
-    ec2.on(DescribeInstancesCommand).resolves({ Reservations: [{ Instances: [{ InstanceId: 'i-a', State: { Name: 'running' }, Architecture: 'arm64', PublicIpAddress: '9.9.9.9', SecurityGroups: [{ GroupId: 'sg-a' }] }] }] });
+    ec2.on(DescribeInstancesCommand).resolves({ Reservations: [{ Instances: [{ InstanceId: 'i-a', State: { Name: 'running' }, Architecture: 'arm64', PublicIpAddress: '9.9.9.9', SecurityGroups: [{ GroupId: 'sg-a' }], Tags: [{ Key: 'Project', Value: 'BuildDoctor' }] }] }] });
     ec2.on(ModifyInstanceAttributeCommand).resolves({});
     ssm.on(DescribeInstanceInformationCommand).resolves({ InstanceInformationList: [{ PingStatus: 'Online' }] });
     const run = makeRun({}, { existingInstanceId: 'i-a' });
@@ -230,5 +230,15 @@ describe('ec2 step', () => {
     expect((await step('ec2').run(makeCtx(run))).ok).toBe(true);
     expect(ec2).toHaveReceivedCommandWith(ModifyInstanceAttributeCommand, { InstanceId: 'i-a', Groups: ['sg-a', 'sg-new'] });
     expect(run.outputs.created).toEqual([]);
+  });
+});
+
+describe('opt-in tag on pre-existing resources', () => {
+  it('refuses an existing SG without Project=BuildDoctor', async () => {
+    ec2.on(DescribeSecurityGroupsCommand).resolves({ SecurityGroups: [{ GroupId: 'sg-prod', GroupName: 'prod', IpPermissions: [] }] });
+    const run = makeRun({}, { existingSecurityGroupId: 'sg-prod' });
+    const res = await step('securityGroup').run(makeCtx(run));
+    expect(res.ok).toBe(false);
+    expect(ec2).not.toHaveReceivedCommand(AuthorizeSecurityGroupIngressCommand);
   });
 });

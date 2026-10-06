@@ -4,7 +4,11 @@
     {
       "Sid": "Ec2Read",
       "Effect": "Allow",
-      "Action": ["ec2:DescribeVpcs", "ec2:DescribeSecurityGroups", "ec2:DescribeInstances"],
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeInstances"
+      ],
       "Resource": "*"
     },
     {
@@ -12,7 +16,11 @@
       "Effect": "Allow",
       "Action": "ec2:CreateSecurityGroup",
       "Resource": "arn:aws:ec2:*:*:security-group/*",
-      "Condition": { "StringEquals": { "aws:RequestTag/Project": "BuildDoctor" } }
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "BuildDoctor"
+        }
+      }
     },
     {
       "Sid": "Ec2CreateSecurityGroupInVpc",
@@ -23,15 +31,30 @@
     {
       "Sid": "Ec2Ingress",
       "Effect": "Allow",
-      "Action": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"],
-      "Resource": "arn:aws:ec2:*:*:security-group/*"
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "arn:aws:ec2:*:*:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "BuildDoctor"
+        }
+      }
     },
     {
       "Sid": "Ec2RunTaggedInstances",
       "Effect": "Allow",
       "Action": "ec2:RunInstances",
-      "Resource": ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*"],
-      "Condition": { "StringEquals": { "aws:RequestTag/Project": "BuildDoctor" } }
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:volume/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "BuildDoctor"
+        }
+      }
     },
     {
       "Sid": "Ec2RunInstancesSupportingResources",
@@ -49,20 +72,45 @@
       "Effect": "Allow",
       "Action": "ec2:CreateTags",
       "Resource": "*",
-      "Condition": { "StringEquals": { "ec2:CreateAction": ["RunInstances", "CreateSecurityGroup"] } }
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": [
+            "RunInstances",
+            "CreateSecurityGroup"
+          ]
+        }
+      }
     },
     {
       "Sid": "Ec2DestroyOnlyBuildDoctor",
       "Effect": "Allow",
-      "Action": ["ec2:TerminateInstances", "ec2:DeleteSecurityGroup"],
-      "Resource": ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:security-group/*"],
-      "Condition": { "StringEquals": { "ec2:ResourceTag/Project": "BuildDoctor" } }
+      "Action": [
+        "ec2:TerminateInstances",
+        "ec2:DeleteSecurityGroup"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:security-group/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "BuildDoctor"
+        }
+      }
     },
     {
       "Sid": "Ec2AttachSgToExistingInstance",
       "Effect": "Allow",
       "Action": "ec2:ModifyInstanceAttribute",
-      "Resource": ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:security-group/*"]
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:security-group/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "BuildDoctor"
+        }
+      }
     },
     {
       "Sid": "EcrAuth",
@@ -106,7 +154,11 @@
       "Effect": "Allow",
       "Action": "iam:AttachRolePolicy",
       "Resource": "arn:aws:iam::*:role/BuildDoctorEC2Role",
-      "Condition": { "ArnEquals": { "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly" } }
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        }
+      }
     },
     {
       "Sid": "IamInstanceProfile",
@@ -124,7 +176,11 @@
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::*:role/BuildDoctorEC2Role",
-      "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
     },
     {
       "Sid": "SsmAmiLookup",
@@ -135,19 +191,37 @@
     {
       "Sid": "SsmEnvParameters",
       "Effect": "Allow",
-      "Action": ["ssm:PutParameter", "ssm:DeleteParameters", "ssm:AddTagsToResource"],
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:DeleteParameters",
+        "ssm:AddTagsToResource"
+      ],
       "Resource": "arn:aws:ssm:*:*:parameter/builddoctor/*"
     },
     {
-      "Sid": "SsmRunShellScript",
+      "Sid": "SsmRunShellScriptDocument",
       "Effect": "Allow",
       "Action": "ssm:SendCommand",
-      "Resource": ["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ec2:*:*:instance/*"]
+      "Resource": "arn:aws:ssm:*::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "SsmRunOnlyOnBuildDoctorInstances",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Project": "BuildDoctor"
+        }
+      }
     },
     {
       "Sid": "SsmRead",
       "Effect": "Allow",
-      "Action": ["ssm:DescribeInstanceInformation", "ssm:GetCommandInvocation"],
+      "Action": [
+        "ssm:DescribeInstanceInformation",
+        "ssm:GetCommandInvocation"
+      ],
       "Resource": "*"
     }
   ]

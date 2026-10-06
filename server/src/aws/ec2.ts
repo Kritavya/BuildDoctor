@@ -143,6 +143,8 @@ async function useExisting(ctx: StepContext, instanceId: string) {
   if (inst.State?.Name !== 'running') problems.push(`state is ${inst.State?.Name}, expected running`);
   if (inst.Architecture !== 'arm64') problems.push(`architecture is ${inst.Architecture}; images are built for arm64 (use a t4g/Graviton instance)`);
   if (!inst.PublicIpAddress) problems.push('it has no public IP address');
+  // The deploy policy only allows SendCommand/ModifyInstanceAttribute on resources tagged Project=BuildDoctor.
+  if (!inst.Tags?.some((t) => t.Key === 'Project' && t.Value === 'BuildDoctor')) problems.push('it is not tagged Project=BuildDoctor (add the tag to opt this instance in)');
   if (!(await ssmOnline(region, instanceId))) problems.push('it is not SSM-managed/online (needs the SSM agent and an instance profile allowing it to register with SSM)');
   if (problems.length) throw new Error(`Instance ${instanceId} unusable: ${problems.join('; ')}`);
 

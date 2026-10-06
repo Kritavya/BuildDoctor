@@ -86,6 +86,9 @@ export const securityGroupStep: Step = {
       const existing = run.config.aws.existingSecurityGroupId;
       if (existing) {
         const sg = await describeSg(region, existing);
+        if (!sg.Tags?.some((t) => t.Key === 'Project' && t.Value === 'BuildDoctor')) {
+          return { ok: false, summary: 'Security group not opted in', error: `Security group ${existing} is not tagged Project=BuildDoctor. Add that tag to let BuildDoctor manage its rules.` };
+        }
         ctx.log(`Using existing security group ${existing} (${sg.GroupName})`);
         if (portOpenToWorld(sg, port)) {
           ctx.log(`Port ${port} is already open`);
