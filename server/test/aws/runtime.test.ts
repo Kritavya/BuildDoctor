@@ -305,6 +305,9 @@ describe('teardown', () => {
     expect(ecr).toHaveReceivedCommandWith(BatchDeleteImageCommand, { repositoryName: 'builddoctor/my_app', imageIds: [{ imageTag: 'run123' }] });
     expect(ecr.commandCalls(DeleteRepositoryCommand)[0].args[0].input).toEqual({ repositoryName: 'builddoctor/my_app' });
     expect(run.outputs.created.map((c) => c.type)).not.toContain('ecr');
+    // Deleted resources leave the record, so a second teardown has nothing stale to retry.
+    expect(run.outputs.created.map((c) => c.type)).not.toContain('ec2');
+    expect(run.outputs.created.map((c) => c.type)).not.toContain('sg');
   });
 
   it('keeps a created repo that still holds other runs\' images', async () => {

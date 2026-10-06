@@ -36,6 +36,7 @@ describe('api', () => {
     const res = await post(`/api/runs/${run.id}/dashboard`, { enabled: true });
     expect(await res.json()).toEqual({ enabled: true });
     expect(store.events(run.id)).toContainEqual({ type: 'output', node: 'dashboard', data: { enabled: true } });
+    expect(store.get(run.id)!.nodes.dashboard.summary).toBe('Metrics and logs running');
   });
 
   it('teardown logs each result line and marks the run torn down', async () => {

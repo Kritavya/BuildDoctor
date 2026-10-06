@@ -144,5 +144,9 @@ export async function teardown(run: RunState): Promise<string[]> {
     out.push(`Kept shared IAM role/instance profile ${ROLE_NAME} (reused by other runs)`);
   }
   if (run.outputs.dashboard?.enabled) run.outputs.dashboard = { enabled: false };
+  // Drop records of what is now gone (done last: the steps above read the record to decide what to keep).
+  const gone = (line: string | undefined) => !!line && !line.startsWith('FAILED') && /terminated|deleted/.test(line);
+  if (instanceId && gone(out.find((l) => l.startsWith(`EC2 instance ${instanceId}`)))) forgetCreated(run, 'ec2', instanceId);
+  if (securityGroupId && gone(out.find((l) => l.startsWith(`Security group ${securityGroupId}`)))) forgetCreated(run, 'sg', securityGroupId);
   return out;
 }

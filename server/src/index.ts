@@ -82,6 +82,10 @@ export function createApp(
       const dashboard = await setDashboard(run, req.body.enabled);
       // Mirror into the event stream so other tabs and replays see the new state.
       store.emit(run.id, { type: 'output', node: 'dashboard', data: dashboard });
+      store.emit(run.id, {
+        type: 'node', node: 'dashboard', status: 'success',
+        summary: dashboard?.enabled ? 'Metrics and logs running' : 'Dashboard available (off)',
+      });
       store.nodeLog(run.id, 'dashboard', `Dashboard turned ${req.body.enabled ? 'on' : 'off'}`);
       res.json(dashboard);
     } catch (err) {
