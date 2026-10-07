@@ -7,7 +7,7 @@ import { chat, chatJson, type ChatMessage } from '../llm/ollama.js';
 import { failures, type Failure } from '../pipeline/engine.js';
 import type { Step, StepContext } from '../pipeline/step.js';
 import type { AnalysisResult, ServicePlan, ServiceRun } from '../types.js';
-import { isSecretFile, readText, scrub, servicesOf, stripFences, tailLines, walk } from './common.js';
+import { isSecretFile, readText, scrub, serviceStatus, servicesOf, stripFences, tailLines, walk } from './common.js';
 
 const DOCKERIGNORE = ['.git', 'node_modules', 'npm-debug.log', '.env', '.env.*', '__pycache__', '*.pyc', '.venv', 'venv', 'dist', 'coverage', '.DS_Store', ''].join('\n');
 const STATIC_SERVER_IMAGE = 'nginxinc/nginx-unprivileged:1.27-alpine'; // non-root, listens on 8080
@@ -315,6 +315,8 @@ export const dockerfile: Step = {
       state!.pending = undefined;
       const target = services.find((s) => s.plan.name === failure.service) ?? services[0];
       const { plan: svc, state: st } = target;
+      const many = services.length > 1;
+      serviceStatus(ctx, 'dockerfile', many, svc.name, 'running', `fixing (attempt ${failure.attempt})`);
       const c = await gather(ctx, svc);
       const file = path.join(ctx.workdir, svc.dockerfile);
       const current = st.dockerfile ?? (await readFile(file, 'utf8').catch(() => ''));
@@ -337,6 +339,7 @@ export const dockerfile: Step = {
         }
       }
       if (!fixed) {
+        serviceStatus(ctx, 'dockerfile', many, svc.name, 'failed', 'no corrected Dockerfile');
         return {
           ok: false,
           summary: `Could not produce a corrected Dockerfile for ${svc.name}`,
@@ -350,6 +353,7 @@ export const dockerfile: Step = {
       st.dockerfile = fixed;
       st.dockerfileMode = 'fixed';
       if (target.primary) ctx.run.dockerfile = fixed;
+      serviceStatus(ctx, 'dockerfile', many, svc.name, 'success', `rewritten (fix attempt ${failure.attempt})`);
       for (const l of fixed.trimEnd().split('\n')) ctx.log(`  ${l}`);
       return {
         ok: true,
@@ -359,7 +363,9 @@ export const dockerfile: Step = {
     }
 
     const outputs: Record<string, unknown> = {};
+    const many = services.length > 1;
     for (const { plan: svc, state: st, primary } of services) {
+      serviceStatus(ctx, 'dockerfile', many, svc.name, 'running');
       if (svc.existingDockerfile) {
         const current = await readFile(path.join(ctx.workdir, svc.dockerfile), 'utf8');
         svc.context = await contextFor(ctx, svc, current);
@@ -385,6 +391,7 @@ export const dockerfile: Step = {
       const ignore = path.join(ctx.workdir, svc.context, '.dockerignore');
       if (!existsSync(ignore)) await writeFile(ignore, DOCKERIGNORE);
       if (primary) ctx.run.dockerfile = st.dockerfile;
+      serviceStatus(ctx, 'dockerfile', many, svc.name, 'success', st.dockerfileMode);
     }
     const primary = outputs[services[0].plan.name] as Record<string, unknown>;
     const modes = services.map((s) => `${s.plan.name}: ${s.state.dockerfileMode}`);

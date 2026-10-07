@@ -9,7 +9,8 @@ import type { RunState } from '../types.js';
 import { clients } from './clients.js';
 import { describeInstance } from './ec2.js';
 import { describeSg } from './network.js';
-import { deleteEnvParams } from './deploy.js';
+import { deleteEnvParams, hasEnvParams } from './deploy.js';
+import { deployServices } from './services.js';
 import { setDashboard } from './dashboard.js';
 import {
   ROLE_NAME, errMsg, errName, forgetCreated, hasRunTag, parseSgRuleId, poll, sleep, timing, wasCreated,
@@ -31,6 +32,7 @@ export async function teardown(run: RunState): Promise<string[]> {
   };
 
   const { instanceId, securityGroupId } = run.outputs;
+  const services = deployServices(run);
   let instanceGone = true;
 
   // Dashboard on a kept instance/SG: stop its containers and revoke its rules first.
@@ -65,7 +67,10 @@ export async function teardown(run: RunState): Promise<string[]> {
       return `Detached ${securityGroupId} from your instance ${instanceId} (instance kept)`;
     });
   }
-  if (instanceId && !wasCreated(run, 'ec2', instanceId)) out.push(`Kept pre-existing instance ${instanceId} (the 'app' container keeps running)`);
+  if (instanceId && !wasCreated(run, 'ec2', instanceId)) {
+    const names = services.map((s) => `'${s.container}'`).join(', ');
+    out.push(`Kept pre-existing instance ${instanceId} (the ${names} container${services.length > 1 ? 's keep' : ' keeps'} running)`);
+  }
 
   if (securityGroupId && wasCreated(run, 'sg', securityGroupId) && instanceGone) {
     await attempt(`delete ${securityGroupId}`, async () => {
@@ -107,17 +112,20 @@ export async function teardown(run: RunState): Promise<string[]> {
   }
   if (securityGroupId && !wasCreated(run, 'sg', securityGroupId)) out.push(`Kept pre-existing security group ${securityGroupId}`);
 
-  // ECR: always drop this run's tag; the repo goes only if we created it and it is now empty.
+  // ECR: always drop this run's tags (one per service); the repo goes only if we created it and it is now empty.
   const repo = run.outputs.ecrRepoUri?.split('/').slice(1).join('/');
   if (repo) {
+    const imageTags = services.map((s) => s.tag);
     await attempt(`clean up ECR ${repo}`, async () => {
       try {
-        await ecr.send(new BatchDeleteImageCommand({ repositoryName: repo, imageIds: [{ imageTag: run.id }] }));
+        await ecr.send(new BatchDeleteImageCommand({ repositoryName: repo, imageIds: imageTags.map((imageTag) => ({ imageTag })) }));
       } catch (e) {
         if (errName(e) === 'RepositoryNotFoundException') return `ECR repository ${repo} (already deleted)`;
         throw e;
       }
-      const msg = `ECR image ${repo}:${run.id} deleted`;
+      const msg = imageTags.length > 1
+        ? `ECR images ${imageTags.map((t) => `${repo}:${t}`).join(', ')} deleted`
+        : `ECR image ${repo}:${run.id} deleted`;
       if (!wasCreated(run, 'ecr', repo)) return `${msg} (pre-existing repository kept)`;
       const left = (await ecr.send(new ListImagesCommand({ repositoryName: repo, maxResults: 1 }))).imageIds ?? [];
       if (left.length) return `${msg}; repository ${repo} kept (still holds images from other runs)`;
@@ -133,7 +141,7 @@ export async function teardown(run: RunState): Promise<string[]> {
     });
   }
 
-  if (Object.keys(run.config.env ?? {}).length) {
+  if (hasEnvParams(run)) {
     await attempt('delete env parameters', async () => {
       const deleted = await deleteEnvParams(run);
       return deleted.length ? `${deleted.length} SSM env parameter(s) deleted` : undefined;

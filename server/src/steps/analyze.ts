@@ -313,7 +313,7 @@ export const analyze: Step = {
     }
     for (const s of plan.skipped) ctx.log(`skipped ${s.root}: ${s.reason}`);
 
-    const provided = Object.keys(ctx.run.config.env ?? {});
+    const provided = [...Object.keys(ctx.run.config.env ?? {}), ...Object.values(ctx.run.config.serviceEnv ?? {}).flatMap((e) => Object.keys(e ?? {}))];
     const analysis: AnalysisResult = {
       runtime: (['node', 'python', 'go'] as const).find((r) => r === primary.runtime) ?? (primary.root === '.' ? det.analysis.runtime : 'unknown'),
       framework: primary.framework ?? (primary.root === '.' ? det.analysis.framework : undefined),
@@ -326,7 +326,7 @@ export const analyze: Step = {
     };
     ctx.run.analysis = analysis;
 
-    const missingEnv = analysis.envVars.filter((v) => !/^(PORT|HOST|NODE_ENV)$/.test(v) && !(ctx.run.config.env ?? {})[v]);
+    const missingEnv = analysis.envVars.filter((v) => !/^(PORT|HOST|NODE_ENV)$/.test(v) && !(ctx.run.config.env?.[v] || Object.values(ctx.run.config.serviceEnv ?? {}).some((e) => e?.[v])));
     if (missingEnv.length) ctx.log(`env vars referenced but not provided: ${missingEnv.join(', ')}`);
     const label = services.length > 1 ? `${services.length} services: ${services.map((s) => `${s.name}:${s.port}`).join(', ')}` : `${analysis.framework ?? primary.runtime} :${primary.port}`;
     return {

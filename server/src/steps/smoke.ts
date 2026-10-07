@@ -1,7 +1,7 @@
 // Runs the built image locally and checks it stays up and answers on its port.
 import net from 'node:net';
 import type { Step, StepContext } from '../pipeline/step.js';
-import { diagnose, docker, hash, scrub, servicesOf, tailLines } from './common.js';
+import { diagnose, docker, envFor, hash, scrub, serviceStatus, servicesOf, tailLines } from './common.js';
 
 const TIMEOUT_MS = 30_000;
 
@@ -66,7 +66,7 @@ interface Verdict { ok: boolean; how?: 'http' | 'tcp'; status?: number; reason?:
 
 async function probe(ctx: StepContext, image: string, name: string, port: number): Promise<{ verdict: Verdict; logs: string }> {
   const hostPort = await freePort();
-  const env = ctx.run.config.env ?? {};
+  const env = envFor(ctx.run, name);
   ctx.log(`docker run -p ${hostPort}:${port} ${image} (env: ${Object.keys(env).join(', ')})`);
   const container = await docker.createContainer({
     Image: image,
@@ -144,15 +144,18 @@ export const smoke: Step = {
       const port = primary ? ctx.run.config.appPort ?? plan.port : plan.port;
       if (state.smoke?.status === 'success' && state.smoke.hash === `${h}:${port}`) continue;
       const tag = many ? `[${plan.name}] ` : '';
+      serviceStatus(ctx, 'smoke', many, plan.name, 'running');
       const { verdict, logs } = await probe(ctx, image, plan.name, port);
       for (const l of tailLines(logs, 40).split('\n')) if (l) ctx.log(`${tag}[app] ${l}`);
       if (verdict.ok) {
         const how = verdict.how === 'http' ? `HTTP ${verdict.status}` : 'TCP accept (no HTTP response; treating as a non-HTTP service)';
         state.smoke = { status: 'success', summary: `port ${port} answered ${how}`, hash: `${h}:${port}` };
+        serviceStatus(ctx, 'smoke', many, plan.name, 'success', state.smoke.summary);
         outputs[plan.name] = { port, check: verdict.how, status: verdict.status, logs: tailLines(logs, 40) };
         continue;
       }
       state.smoke = { status: 'failed', summary: verdict.reason, hash: `${h}:${port}` };
+      serviceStatus(ctx, 'smoke', many, plan.name, 'failed', verdict.reason);
       let evidence = `${verdict.reason}\n--- container logs ---\n${tailLines(logs, 60) || '(no output)'}`;
       // A clean exit means the start command returned: it daemonised, or it is a one-off task, not the server.
       if (/exited with code 0\b/.test(verdict.reason ?? '')) {

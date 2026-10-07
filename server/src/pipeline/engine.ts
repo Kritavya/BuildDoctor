@@ -223,7 +223,8 @@ export class Engine {
       else if (s === 'running' || s === 'waiting') this.store.emit(run.id, { type: 'node', node: n, status: 'failed' });
     }
     run.status = status;
-    this.store.emit(run.id, { type: 'done', status, appUrl: status === 'live' ? run.outputs.appUrl : undefined, diagnosis });
+    const live = status === 'live';
+    this.store.emit(run.id, { type: 'done', status, appUrl: live ? run.outputs.appUrl : undefined, ...(live && run.outputs.services ? { services: run.outputs.services } : {}), diagnosis });
   }
 }
 
@@ -247,21 +248,30 @@ export function approvalRequest(run: RunState): ApprovalRequest {
   return { actions };
 }
 
-const PATCH_KEYS = new Set(['appPort']);
+const PATCH_KEYS = new Set(['appPort', 'service']);
 
 // Validates a step's config patch against the whitelist and applies it to run.config.
 // Rejects unknown keys (including env), invalid ports, SSH, and no-op changes.
+// With `service` naming a non-primary service, the port is that service's planned port instead.
 export function applyPatch(run: RunState, patch: unknown): { applied: ConfigPatch } | { rejected: string } {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { rejected: 'not an object' };
   const bad = Object.keys(patch).filter((k) => !PATCH_KEYS.has(k));
   if (bad.length) return { rejected: `keys not allowed: ${bad.join(', ')}` };
-  const { appPort } = patch as ConfigPatch;
-  const current = run.config.appPort ?? run.analysis?.port;
+  const { appPort, service } = patch as ConfigPatch;
+  const plans = run.analysis?.services ?? [];
+  const idx = service === undefined ? 0 : plans.findIndex((s) => s.name === service);
+  if (service !== undefined && idx < 0) return { rejected: `unknown service ${String(service)}` };
+  const current = idx > 0 ? plans[idx].port : run.config.appPort ?? run.analysis?.port;
   if (appPort === undefined) return { rejected: 'empty patch' };
   if (!Number.isInteger(appPort) || appPort < 1 || appPort > 65535 || appPort === 22) return { rejected: `invalid appPort ${String(appPort)}` };
   if (appPort === current) return { rejected: `appPort is already ${appPort}` };
+  if (idx > 0) {
+    plans[idx].port = appPort;
+    plans[idx].portEvidence = 'health check: container logs';
+    return { applied: { appPort, service } };
+  }
   run.config = { ...run.config, appPort };
-  return { applied: { appPort } };
+  return { applied: service !== undefined ? { appPort, service } : { appPort } };
 }
 
 function cancelled(): Diagnosis {

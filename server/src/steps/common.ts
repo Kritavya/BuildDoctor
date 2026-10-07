@@ -4,7 +4,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import Docker from 'dockerode';
 import { chatJson } from '../llm/ollama.js';
-import type { Diagnosis, RunState, ServicePlan, ServiceRun } from '../types.js';
+import type { Diagnosis, NodeId, NodeStatus, RunState, ServicePlan, ServiceRun } from '../types.js';
+import type { StepContext } from '../pipeline/step.js';
 
 export const docker = new Docker();
 
@@ -26,6 +27,21 @@ export function servicesOf(run: RunState): Array<{ plan: ServicePlan; state: Ser
     state.image = image;
     return { plan, state, primary: i === 0, image };
   });
+}
+
+// Env a service's container gets: the run's env plus its own serviceEnv entries (which win).
+export function envFor(run: RunState, service?: string): Record<string, string> {
+  return { ...run.config.env, ...(service ? run.config.serviceEnv?.[service] : undefined) };
+}
+
+// Every configured env value (global and per service), for masking.
+export function envValues(run: RunState): string[] {
+  return [...Object.values(run.config.env ?? {}), ...Object.values(run.config.serviceEnv ?? {}).flatMap((e) => Object.values(e ?? {}))];
+}
+
+// Per-service progress within a node; multi-service runs only, so single-service event streams are unchanged.
+export function serviceStatus(ctx: StepContext, node: NodeId, many: boolean, service: string, status: NodeStatus, summary?: string): void {
+  if (many) ctx.emit({ type: 'service', node, service, status, ...(summary !== undefined ? { summary } : {}) });
 }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'venv', '.venv', 'env', '__pycache__', 'dist', 'build', '.next', 'vendor', 'target', 'coverage']);
@@ -77,7 +93,7 @@ export function tailLines(text: string, n: number): string {
 // Replace any configured env value that shows up in a log before it reaches the LLM or the UI.
 export function scrub(text: string, run: RunState): string {
   let out = text;
-  for (const v of Object.values(run.config.env ?? {})) if (v && v.length >= 3) out = out.split(v).join('***');
+  for (const v of envValues(run)) if (v && v.length >= 3) out = out.split(v).join('***');
   return out;
 }
 

@@ -39,6 +39,9 @@ export interface RunConfig {
   branch?: string;              // default: repo default branch
   appPort?: number;             // override detected port
   env?: Record<string, string>; // passed to container; values never logged or sent to the LLM
+  // Multi-service runs: per-service env on top of `env` (service value wins). Keyed by ServicePlan.name;
+  // same secrecy rules as `env`.
+  serviceEnv?: Record<string, Record<string, string>>;
   aws: {
     region: string;             // e.g. ap-south-1
     instanceType: InstanceSize;
@@ -53,6 +56,7 @@ export interface RunConfig {
 // port can be remapped. Env values are never patched; a missing env var fails with "please provide X".
 export interface ConfigPatch {
   appPort?: number;
+  service?: string;             // multi-service runs: the service whose port appPort remaps (absent: the primary)
 }
 
 // The top-level fields describe the primary service (services[0]) so single-service consumers keep working.
@@ -116,6 +120,27 @@ export interface Diagnosis {
 
 export interface ApprovalRequest {
   actions: string[]; // human readable: "Create EC2 instance t3.micro in ap-south-1"
+  services?: ApprovalService[]; // multi-service runs: what each container gets, for the UI
+}
+
+export interface ApprovalService {
+  name: string;
+  container: string;            // container name on the instance (app-<service>)
+  image: string;                // ECR tag, e.g. builddoctor/shop:<runId>-api
+  port: number;
+  kind: 'server' | 'static';
+  injected: Record<string, string>; // env set to another service's address (not secret), e.g. API_URL=http://app-api:4000
+  unset: string[];              // env names the service reads that nobody provided ("you may need to set X")
+  notes: string[];              // dependency addresses BuildDoctor could not wire up by itself
+}
+
+// One deployed service (multi-service runs). url/healthy are filled in by the health check.
+export interface ServiceOutput {
+  port: number;
+  container: string;
+  imageUri?: string;
+  url?: string;
+  healthy?: boolean;
 }
 
 export interface DeployOutputs {
@@ -125,6 +150,7 @@ export interface DeployOutputs {
   instanceId?: string;
   publicIp?: string;
   appUrl?: string;
+  services?: Record<string, ServiceOutput>; // multi-service runs only, keyed by ServicePlan.name
   dashboard?: { enabled: boolean; metricsUrl?: string; logsUrl?: string };
   // sg-rule id: <groupId>:<port>:<cidr>, an ingress rule we added to a pre-existing security group.
   created: Array<{ type: 'ecr' | 'sg' | 'sg-rule' | 'ec2' | 'iam-role' | 'instance-profile'; id: string }>; // for teardown
@@ -135,14 +161,19 @@ export type RunEvent =
   | { type: 'node'; node: NodeId; status: NodeStatus; summary?: string; attempt?: number }
   | { type: 'log'; node: NodeId; line: string; ts: number }
   | { type: 'output'; node: NodeId; data: unknown }          // shown in the node's side panel
+  // Multi-service runs: one service's state within a node (dockerfile, lint, build, smoke, deploy, health).
+  | { type: 'service'; node: NodeId; service: string; status: NodeStatus; summary?: string }
   | { type: 'retry'; from: NodeId; to: NodeId; attempt: number; diagnosis: Diagnosis; patch?: ConfigPatch; service?: string }
   | { type: 'approval'; request: ApprovalRequest }           // pipeline pauses at 'approve'
-  | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; diagnosis?: Diagnosis };
+  | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; services?: Record<string, ServiceOutput>; diagnosis?: Diagnosis };
 
 export interface RunState {
   id: string;
   config: RunConfig;
-  nodes: Record<NodeId, { status: NodeStatus; summary?: string; attempt?: number; output?: unknown; logs: string[] }>;
+  nodes: Record<NodeId, {
+    status: NodeStatus; summary?: string; attempt?: number; output?: unknown; logs: string[];
+    services?: Record<string, { status: NodeStatus; summary?: string }>; // from 'service' events
+  }>;
   analysis?: AnalysisResult;
   dockerfile?: string;          // the primary service's Dockerfile
   services?: Record<string, ServiceRun>; // keyed by ServicePlan.name

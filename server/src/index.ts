@@ -4,8 +4,7 @@ import { GetRoleCommand, IAMClient } from '@aws-sdk/client-iam';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
-import { awsSteps, plannedActions, setDashboard, teardown } from './aws/steps.js';
-import { appPort } from './aws/util.js';
+import { approvalPlan, awsSteps, setDashboard, teardown } from './aws/steps.js';
 import { MODEL, ollamaReady } from './llm/ollama.js';
 import { Engine, WORKSPACES } from './pipeline/engine.js';
 import path from 'node:path';
@@ -19,7 +18,7 @@ const INSTANCE_SIZES: InstanceSize[] = ['t4g.micro', 't4g.small', 't4g.medium'];
 export function createApp(
   store = new RunStore(),
   engine = new Engine(store, [...localSteps, ...awsSteps], {
-    planApproval: (run) => ({ actions: plannedActions(run.config, appPort(run)) }),
+    planApproval: approvalPlan,
     cleanup: removeLocalImages,
   }),
 ) {
@@ -158,7 +157,10 @@ function validateConfig(b: unknown): string | undefined {
   if (!c || typeof c.repoUrl !== 'string' || !/^(https:\/\/|git@)/.test(c.repoUrl)) return 'repoUrl must be an https:// or git@ URL';
   if (c.branch !== undefined && (typeof c.branch !== 'string' || !/^[\w./-]+$/.test(c.branch))) return 'invalid branch';
   if (c.appPort !== undefined && !(Number.isInteger(c.appPort) && c.appPort > 0 && c.appPort < 65536)) return 'invalid appPort';
-  if (c.env !== undefined && (typeof c.env !== 'object' || Object.values(c.env).some((v) => typeof v !== 'string'))) return 'env must be a string map';
+  if (c.env !== undefined && !isStringMap(c.env)) return 'env must be a string map';
+  if (c.serviceEnv !== undefined && (!c.serviceEnv || typeof c.serviceEnv !== 'object' || Array.isArray(c.serviceEnv) || Object.values(c.serviceEnv).some((e) => !isStringMap(e)))) {
+    return 'serviceEnv must map service names to string maps';
+  }
   if (!c.aws || typeof c.aws.region !== 'string' || !/^[a-z]{2}-[a-z]+-\d$/.test(c.aws.region)) return 'aws.region is required';
   if (!INSTANCE_SIZES.includes(c.aws.instanceType)) return `aws.instanceType must be one of ${INSTANCE_SIZES.join(', ')}`;
   if (c.aws.openPorts !== undefined && (!Array.isArray(c.aws.openPorts) || c.aws.openPorts.some((p) => !Number.isInteger(p) || p < 1 || p > 65535))) return 'invalid aws.openPorts';
@@ -166,10 +168,16 @@ function validateConfig(b: unknown): string | undefined {
   return undefined;
 }
 
+function isStringMap(v: unknown): v is Record<string, string> {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => typeof x === 'string');
+}
+
 // Env values never leave the server; the UI only needs the names.
 function redactRun<T extends { config: RunConfig }>(run: T): T {
-  const env = run.config.env && Object.fromEntries(Object.keys(run.config.env).map((k) => [k, '***']));
-  return { ...run, config: { ...run.config, env, repoUrl: redactUrl(run.config.repoUrl) } };
+  const mask = (e: Record<string, string>) => Object.fromEntries(Object.keys(e).map((k) => [k, '***']));
+  const env = run.config.env && mask(run.config.env);
+  const serviceEnv = run.config.serviceEnv && Object.fromEntries(Object.entries(run.config.serviceEnv).map(([s, e]) => [s, mask(e)]));
+  return { ...run, config: { ...run.config, env, ...(serviceEnv ? { serviceEnv } : {}), repoUrl: redactUrl(run.config.repoUrl) } };
 }
 
 // Credentials embedded in an https clone URL.
@@ -179,7 +187,8 @@ function redactUrl(url: string): string {
 
 async function removeLocalImages(run: RunState): Promise<void> {
   const perService = Object.values(run.services ?? {}).map((s) => s.image).filter((t): t is string => !!t);
-  const tags = [...new Set([imageTag(run.id), ...perService, ...(run.outputs.ecrRepoUri ? [`${run.outputs.ecrRepoUri}:${run.id}`] : [])])];
+  const pushed = Object.values(run.outputs.services ?? {}).map((s) => s.imageUri).filter((t): t is string => !!t);
+  const tags = [...new Set([imageTag(run.id), ...perService, ...(run.outputs.ecrRepoUri ? [`${run.outputs.ecrRepoUri}:${run.id}`] : []), ...pushed])];
   for (const t of tags) await docker.getImage(t).remove({ force: true }).catch(() => {});
 }
 

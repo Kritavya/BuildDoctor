@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 vi.mock('../src/aws/steps.js', () => ({
   awsSteps: [],
   plannedActions: () => ['plan'],
+  approvalPlan: () => ({ actions: ['plan'] }),
   setDashboard: vi.fn(async (run: { outputs: { dashboard?: unknown } }, enabled: boolean) => (run.outputs.dashboard = { enabled })),
   teardown: vi.fn(async () => ['EC2 instance i-1 terminated']),
 }));

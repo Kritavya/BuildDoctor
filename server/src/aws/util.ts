@@ -116,9 +116,13 @@ export function throttledLogger(log: (l: string) => void, intervalMs = 2_000) {
 }
 
 // Masks configured env values in text that leaves the host (logs, LLM prompts).
-export function redact(text: string, env: Record<string, string> | undefined): string {
+// Pass the whole run to cover per-service env too.
+export function redact(text: string, env: Record<string, string> | RunState | undefined): string {
+  const values = env && 'config' in env && typeof env.config === 'object'
+    ? [...Object.values(env.config.env ?? {}), ...Object.values(env.config.serviceEnv ?? {}).flatMap((e) => Object.values(e ?? {}))]
+    : Object.values((env ?? {}) as Record<string, string>);
   let out = text;
-  for (const v of Object.values(env ?? {})) if (v && v.length >= 4) out = out.split(v).join('***');
+  for (const v of values) if (v && v.length >= 4) out = out.split(v).join('***');
   return out;
 }
 

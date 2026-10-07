@@ -2,7 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import type { Step } from '../pipeline/step.js';
-import { diagnose, docker, hash, scrub, servicesOf, tailLines, walk } from './common.js';
+import { diagnose, docker, hash, scrub, serviceStatus, servicesOf, tailLines, walk } from './common.js';
 
 export const PLATFORM = 'linux/arm64';
 
@@ -17,6 +17,7 @@ export const build: Step = {
       const h = hash(state.dockerfile ?? '');
       if (state.build?.status === 'success' && state.build.hash === h) continue; // image is current
       const tag = many ? `[${plan.name}] ` : '';
+      serviceStatus(ctx, 'build', many, plan.name, 'running');
       const lines: string[] = [];
       const push = (l: string) => {
         const line = scrub(l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd(), ctx.run);
@@ -53,6 +54,7 @@ export const build: Step = {
       if (error) {
         const logTail = tailLines(lines.join('\n'), 80);
         state.build = { status: 'failed', summary: error.split('\n')[0].slice(0, 120), hash: h };
+        serviceStatus(ctx, 'build', many, plan.name, 'failed', state.build.summary);
         ctx.log('diagnosing build failure...');
         const diagnosis = await diagnose(ctx.run, 'build', logTail, ctx.signal, { plan, dockerfile: state.dockerfile });
         return { ok: false, summary: `${tag}Build failed: ${error.split('\n')[0].slice(0, 120)}`, error: logTail, retryFrom: 'dockerfile', diagnosis, service: plan.name };
@@ -60,6 +62,7 @@ export const build: Step = {
       const info = await docker.getImage(image).inspect();
       const mb = Math.round(info.Size / 1e6);
       state.build = { status: 'success', summary: `${mb} MB · ${Math.round((Date.now() - started) / 1000)}s`, hash: h };
+      serviceStatus(ctx, 'build', many, plan.name, 'success', state.build.summary);
       outputs[plan.name] = { image, imageId: info.Id, sizeMb: mb, arch: info.Architecture, layers: info.RootFS?.Layers?.length };
     }
     const p = services[0];

@@ -111,6 +111,9 @@ export class RunStore {
       if (logs.length > MAX_LOG_LINES) logs.splice(0, logs.length - MAX_LOG_LINES);
     } else if (e.type === 'output') {
       run.nodes[e.node].output = e.data;
+    } else if (e.type === 'service') {
+      const n = run.nodes[e.node];
+      n.services = { ...n.services, [e.service]: { status: e.status, ...(e.summary !== undefined ? { summary: e.summary } : {}) } };
     }
     this.history.get(id)!.push(e);
     this.touch(id);

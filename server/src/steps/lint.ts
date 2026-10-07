@@ -1,7 +1,7 @@
 // hadolint via its Docker image. Error-level findings fail back to the dockerfile step; the rest are reported.
 import { spawn } from 'node:child_process';
 import type { Step } from '../pipeline/step.js';
-import { hash, servicesOf } from './common.js';
+import { hash, serviceStatus, servicesOf } from './common.js';
 
 interface Finding {
   line: number;
@@ -41,12 +41,14 @@ export const lint: Step = {
     for (const { plan, state } of services) {
       const h = hash(state.dockerfile!);
       if (state.lint?.status === 'success' && state.lint.hash === h) continue; // unchanged since it passed
+      serviceStatus(ctx, 'lint', many, plan.name, 'running');
       let findings: Finding[];
       try {
         findings = await hadolint(state.dockerfile!, ctx.signal);
       } catch (err) {
         // Linting is advisory infrastructure; a missing hadolint image must not block the build.
         ctx.log(`hadolint unavailable: ${err instanceof Error ? err.message : err}`);
+        for (const s of services) serviceStatus(ctx, 'lint', many, s.plan.name, 'skipped', 'hadolint unavailable');
         return { ok: true, summary: 'Lint skipped (hadolint unavailable)', output: { skipped: true } };
       }
       const tag = many ? `[${plan.name}] ` : '';
@@ -55,6 +57,7 @@ export const lint: Step = {
       if (errors.length) {
         const text = errors.map((f) => `line ${f.line} ${f.code}: ${f.message}`).join('\n');
         state.lint = { status: 'failed', summary: `${errors.length} error(s)`, hash: h };
+        serviceStatus(ctx, 'lint', many, plan.name, 'failed', state.lint.summary);
         return {
           ok: false,
           summary: `${tag}hadolint: ${errors.length} error(s)`,
@@ -70,6 +73,7 @@ export const lint: Step = {
         };
       }
       state.lint = { status: 'success', summary: `${findings.length} warning(s)`, hash: h };
+      serviceStatus(ctx, 'lint', many, plan.name, 'success', state.lint.summary);
       warned[plan.name] = findings;
     }
     const count = Object.values(warned).reduce((n, f) => n + f.length, 0);

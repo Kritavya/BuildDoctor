@@ -10,7 +10,8 @@ import {
 import type { Step } from '../pipeline/step.js';
 import type { RunState } from '../types.js';
 import { clients } from './clients.js';
-import { appPort, errMsg, errName, forgetCreated, recordCreated, sgRuleId, tags, wasCreated } from './util.js';
+import { deployServices } from './services.js';
+import { errMsg, errName, forgetCreated, recordCreated, sgRuleId, tags, wasCreated } from './util.js';
 
 export async function describeSg(region: string, groupId: string): Promise<SecurityGroup> {
   const res = await clients(region).ec2.send(new DescribeSecurityGroupsCommand({ GroupIds: [groupId] }));
@@ -70,6 +71,7 @@ export async function revokeTagged(
 // Opens the app port when missing, but only on a security group this run created. A pre-existing
 // group was approved for one port; changing it again needs a new run. Returns an error message or undefined.
 export async function ensureAppPort(run: RunState, port: number, log: (l: string) => void): Promise<string | undefined> {
+  if (port === 22) return 'Port 22 is never opened: the instance is managed through SSM. Make the app listen on another port.';
   const sgId = run.outputs.securityGroupId;
   if (!sgId || portOpenToWorld(await describeSg(run.config.aws.region, sgId), port)) return undefined;
   if (!wasCreated(run, 'sg', sgId)) {
@@ -81,8 +83,13 @@ export async function ensureAppPort(run: RunState, port: number, log: (l: string
   return undefined;
 }
 
+// Every service's port (multi-service runs) plus the extra ports from the config.
+export function servicePorts(run: RunState): number[] {
+  return [...new Set(deployServices(run).map((s) => s.port))];
+}
+
 export function inboundPorts(run: RunState): { ports: number[]; dropped: number[] } {
-  const all = [appPort(run), ...(run.config.aws.openPorts ?? [])];
+  const all = [...servicePorts(run), ...(run.config.aws.openPorts ?? [])];
   // SSH is never opened: the instance is managed through SSM.
   const dropped = all.filter((p) => p === 22);
   const ports = [...new Set(all.filter((p) => p !== 22 && Number.isInteger(p) && p > 0 && p < 65536))];
@@ -95,7 +102,6 @@ export const securityGroupStep: Step = {
     const { run } = ctx;
     const region = run.config.aws.region;
     const { ec2 } = clients(region);
-    const port = appPort(run);
     try {
       const existing = run.config.aws.existingSecurityGroupId;
       if (existing) {
@@ -104,13 +110,18 @@ export const securityGroupStep: Step = {
           return { ok: false, summary: 'Security group not opted in', error: `Security group ${existing} is not tagged Project=BuildDoctor. Add that tag to let BuildDoctor manage its rules.` };
         }
         ctx.log(`Using existing security group ${existing} (${sg.GroupName})`);
-        if (portOpenToWorld(sg, port)) {
-          ctx.log(`Port ${port} is already open`);
-        } else {
-          ctx.log(`Adding inbound rule tcp/${port} from 0.0.0.0/0 to your security group ${existing}`);
-          await authorizePorts(region, existing, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
-          ctx.log('This rule is removed again on teardown');
+        // Only the service ports listed at approval; the extra openPorts are for groups we create.
+        let added = 0;
+        for (const port of servicePorts(run).filter((p) => p !== 22)) {
+          if (portOpenToWorld(sg, port)) {
+            ctx.log(`Port ${port} is already open`);
+          } else {
+            ctx.log(`Adding inbound rule tcp/${port} from 0.0.0.0/0 to your security group ${existing}`);
+            await authorizePorts(region, existing, [port], '0.0.0.0/0', 'BuildDoctor app port', run);
+            added++;
+          }
         }
+        if (added) ctx.log(added > 1 ? 'These rules are removed again on teardown' : 'This rule is removed again on teardown');
         run.outputs.securityGroupId = existing;
         return { ok: true, summary: `Using ${existing}`, output: { securityGroupId: existing, reused: true } };
       }
