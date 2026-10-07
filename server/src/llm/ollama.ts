@@ -9,7 +9,7 @@ export const MODEL = process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b';
 
 export async function chat(
   messages: ChatMessage[],
-  opts: { json?: boolean; temperature?: number; signal?: AbortSignal } = {},
+  opts: { json?: boolean; temperature?: number; signal?: AbortSignal; numCtx?: number } = {},
 ): Promise<string> {
   const res = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
@@ -20,7 +20,7 @@ export async function chat(
       messages,
       stream: false,
       format: opts.json ? 'json' : undefined,
-      options: { temperature: opts.temperature ?? 0.2, num_ctx: 8192 },
+      options: { temperature: opts.temperature ?? 0.2, num_ctx: opts.numCtx ?? 8192 },
     }),
   });
   if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
@@ -28,7 +28,7 @@ export async function chat(
   return body.message.content;
 }
 
-export async function chatJson<T>(messages: ChatMessage[], opts: { signal?: AbortSignal } = {}): Promise<T> {
+export async function chatJson<T>(messages: ChatMessage[], opts: { signal?: AbortSignal; temperature?: number; numCtx?: number } = {}): Promise<T> {
   return JSON.parse(await chat(messages, { ...opts, json: true })) as T;
 }
 

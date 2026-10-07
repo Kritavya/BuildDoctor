@@ -60,7 +60,7 @@ describe('dockerfile helpers', () => {
 
   it('flags COPY of files that do not exist and npm ci without a lockfile', () => {
     const p = validate('FROM node:20-slim\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY . .\nEXPOSE 3000\nCMD ["npm","start"]\n', 3000, ['package.json', 'server.js']);
-    expect(p).toEqual(['COPY source "package-lock.json" does not exist in the repository', 'uses "npm ci" but there is no package-lock.json (use "npm install --omit=dev")']);
+    expect(p).toEqual(['COPY source "package-lock.json" does not exist in the repository', 'uses "npm ci" but there is no package-lock.json (use "npm install")']);
   });
 
   it('template produces a valid Dockerfile', () => {

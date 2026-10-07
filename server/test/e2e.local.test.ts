@@ -17,6 +17,7 @@ const available = (await docker.ping().then(() => true, () => false)) && (await 
 const root = await mkdtemp(path.join(os.tmpdir(), 'builddoctor-e2e-'));
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const images: string[] = [];
+const runIds: string[] = [];
 
 async function runFixture(name: string, env?: Record<string, string>) {
   const store = new RunStore();
@@ -32,6 +33,7 @@ async function runFixture(name: string, env?: Record<string, string>) {
   const engine = new Engine(store, steps, { workspaceRoot: root, nodes: ['clone', 'analyze', 'dockerfile', 'lint', 'build', 'smoke'] });
   const run = store.create({ repoUrl: `file://${name}`, env, maxFixAttempts: 3, aws: { region: 'ap-south-1', instanceType: 't4g.small', openPorts: [] } });
   images.push(imageTag(run.id));
+  runIds.push(run.id);
   const events: RunEvent[] = [];
   store.subscribe(run.id, (e) => events.push(e));
   await engine.start(run);
@@ -51,6 +53,10 @@ async function runFixture(name: string, env?: Record<string, string>) {
 describe.skipIf(!available)('local pipeline e2e (docker + ollama)', () => {
   afterAll(async () => {
     for (const t of images) await docker.getImage(t).remove({ force: true }).catch(() => {});
+    // per-service images of multi-service runs: builddoctor/<runId>-<service>
+    for (const img of await docker.listImages().catch(() => [])) {
+      for (const t of img.RepoTags ?? []) if (runIds.some((id) => t.startsWith(`builddoctor/${id}`))) await docker.getImage(t).remove({ force: true }).catch(() => {});
+    }
     await rm(root, { recursive: true, force: true });
   });
 
@@ -69,6 +75,16 @@ describe.skipIf(!available)('local pipeline e2e (docker + ollama)', () => {
     expect(done.status).toBe('live');
     expect(run.nodes.smoke.status).toBe('success');
     expect(run.analysis?.framework).toBe('fastapi');
+  });
+
+  it('workspaces-monorepo: plans two services, builds and serves both', { timeout: 20 * 60_000 }, async () => {
+    const { run, done } = await runFixture('workspaces-monorepo');
+    expect(done.status).toBe('live');
+    const services = run.analysis?.services ?? [];
+    expect(services.map((s) => s.root).sort()).toEqual(['apps/api', 'apps/web']);
+    expect(services.every((s) => s.context === '.')).toBe(true);
+    for (const s of services) expect(run.services?.[s.name]?.smoke?.status).toBe('success');
+    expect(Object.fromEntries(services.map((s) => [s.root, s.port]))).toEqual({ 'apps/api': 4000, 'apps/web': 5050 });
   });
 
   it('express-broken: doctor loop repairs the existing Dockerfile or reports honestly', { timeout: 20 * 60_000 }, async () => {

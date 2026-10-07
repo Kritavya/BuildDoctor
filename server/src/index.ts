@@ -178,7 +178,8 @@ function redactUrl(url: string): string {
 }
 
 async function removeLocalImages(run: RunState): Promise<void> {
-  const tags = [imageTag(run.id), ...(run.outputs.ecrRepoUri ? [`${run.outputs.ecrRepoUri}:${run.id}`] : [])];
+  const perService = Object.values(run.services ?? {}).map((s) => s.image).filter((t): t is string => !!t);
+  const tags = [...new Set([imageTag(run.id), ...perService, ...(run.outputs.ecrRepoUri ? [`${run.outputs.ecrRepoUri}:${run.id}`] : [])])];
   for (const t of tags) await docker.getImage(t).remove({ force: true }).catch(() => {});
 }
 

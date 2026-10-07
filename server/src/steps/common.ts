@@ -1,13 +1,32 @@
 // Helpers shared by the local steps: file walking, LLM output cleanup and failure diagnosis.
+import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import Docker from 'dockerode';
 import { chatJson } from '../llm/ollama.js';
-import type { Diagnosis, RunState } from '../types.js';
+import type { Diagnosis, RunState, ServicePlan, ServiceRun } from '../types.js';
 
 export const docker = new Docker();
 
 export const imageTag = (runId: string) => `builddoctor/${runId}:latest`;
+
+// The primary service keeps imageTag(runId) so single-service consumers (ECR push, cleanup) are unchanged.
+export const serviceImageTag = (runId: string, svc: ServicePlan, primary: boolean) =>
+  primary ? imageTag(runId) : `builddoctor/${runId}-${svc.name}:latest`;
+
+export const hash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+// Planned services of a run with their mutable per-service state; [0] is the primary.
+export function servicesOf(run: RunState): Array<{ plan: ServicePlan; state: ServiceRun; primary: boolean; image: string }> {
+  const plans = run.analysis?.services ?? [];
+  run.services ??= {};
+  return plans.map((plan, i) => {
+    const state = (run.services![plan.name] ??= {});
+    const image = serviceImageTag(run.id, plan, i === 0);
+    state.image = image;
+    return { plan, state, primary: i === 0, image };
+  });
+}
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'venv', '.venv', 'env', '__pycache__', 'dist', 'build', '.next', 'vendor', 'target', 'coverage']);
 
@@ -68,6 +87,7 @@ export async function diagnose(
   stage: 'lint' | 'build' | 'smoke',
   logTail: string,
   signal?: AbortSignal,
+  service?: { plan: ServicePlan; dockerfile?: string },
 ): Promise<Diagnosis> {
   const safeLog = scrub(logTail, run);
   try {
@@ -83,7 +103,9 @@ export async function diagnose(
         {
           role: 'user',
           content:
-            `Project: ${JSON.stringify(run.analysis ?? {})}\n\nDockerfile:\n${run.dockerfile ?? '(none)'}\n\n` +
+            (service
+              ? `Service plan: ${JSON.stringify(service.plan)}\n\nDockerfile:\n${service.dockerfile ?? '(none)'}\n\n`
+              : `Project: ${JSON.stringify(run.analysis ?? {})}\n\nDockerfile:\n${run.dockerfile ?? '(none)'}\n\n`) +
             `Failure log (last lines):\n${safeLog}`,
         },
       ],

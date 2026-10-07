@@ -14,6 +14,7 @@ export interface Failure {
   error: string;     // error / log tail from the step
   diagnosis?: Diagnosis;
   attempt: number;   // retry number this failure triggered
+  service?: string;  // failing service (multi-service runs); the dockerfile step fixes only this one
 }
 
 // Failures the doctor loop is retrying from. The step at retryFrom reads (and clears) `pending`;
@@ -95,7 +96,7 @@ export class Engine {
   private async loop(run: RunState, signal: AbortSignal): Promise<void> {
     const emit: StepContext['emit'] = (e) => this.store.emit(run.id, e);
     const max = run.config.maxFixAttempts ?? 3;
-    const loops = new Map<NodeId, number>(); // retryFrom target -> retries used
+    const loops = new Map<string, number>(); // retryFrom target (+ service) -> retries used
     const state = { history: [] as Failure[] } as { pending?: Failure; history: Failure[] };
     failures.set(run, state);
     let lastDiagnosis: Diagnosis | undefined;
@@ -160,7 +161,8 @@ export class Engine {
       };
       lastDiagnosis = diagnosis;
       const to = result.retryFrom;
-      const used = to ? loops.get(to) ?? 0 : 0;
+      const key = to && result.service ? `${to}#${result.service}` : to;
+      const used = key ? loops.get(key) ?? 0 : 0;
       const target = to ? this.nodes.indexOf(to) : -1;
 
       if (!to || target < 0 || target > i || used >= max || signal.aborted) {
@@ -182,11 +184,11 @@ export class Engine {
         this.store.nodeLog(run.id, node, `applying config patch before retry: ${JSON.stringify(patch)}`);
       }
 
-      loops.set(to, used + 1);
-      const failure: Failure = { node, error: result.error, diagnosis, attempt: used + 1 };
+      loops.set(key!, used + 1);
+      const failure: Failure = { node, error: result.error, diagnosis, attempt: used + 1, ...(result.service ? { service: result.service } : {}) };
       state.pending = failure;
       state.history.push(failure);
-      emit({ type: 'retry', from: node, to, attempt: used + 1, diagnosis, ...(patch ? { patch } : {}) });
+      emit({ type: 'retry', from: node, to, attempt: used + 1, diagnosis, ...(patch ? { patch } : {}), ...(result.service ? { service: result.service } : {}) });
       i = target;
     }
 

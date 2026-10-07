@@ -12,7 +12,8 @@ export type StepResult =
   | { ok: true; summary: string; output?: unknown }
   // retryFrom: node the doctor loop should resume at after applying a fix.
   // patch: runtime-config change applied to run.config before resuming (see applyPatch in the engine).
-  | { ok: false; summary: string; error: string; retryFrom?: NodeId; diagnosis?: Diagnosis; patch?: ConfigPatch };
+  // service: the service that failed; each service gets its own retry budget and only it is fixed.
+  | { ok: false; summary: string; error: string; retryFrom?: NodeId; diagnosis?: Diagnosis; patch?: ConfigPatch; service?: string };
 
 export interface Step {
   id: NodeId;

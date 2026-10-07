@@ -55,6 +55,7 @@ export interface ConfigPatch {
   appPort?: number;
 }
 
+// The top-level fields describe the primary service (services[0]) so single-service consumers keep working.
 export interface AnalysisResult {
   runtime: 'node' | 'python' | 'go' | 'unknown';
   framework?: string;           // express, next, fastapi, django, flask...
@@ -63,6 +64,45 @@ export interface AnalysisResult {
   envVars: string[];            // names only
   dependencyFiles: string[];
   dockerfile: 'missing' | 'present';
+  services?: ServicePlan[];     // every deployable service; [0] is the primary. Absent on old runs.
+}
+
+// One deployable unit from the service plan. All paths are relative to the repo root.
+export interface ServicePlan {
+  name: string;                 // unique slug; names the image and the per-service state
+  root: string;                 // package directory ('.' for single-package repos)
+  context: string;              // docker build context (the repo root for workspace members, so shared packages resolve)
+  dockerfile: string;           // Dockerfile path, relative to the repo root
+  existingDockerfile: boolean;  // the repo shipped this Dockerfile (kept + reviewed, rewritten only on failure)
+  kind: 'server' | 'static';    // static: buildCommand output (outputDir) served by a static file server
+  runtime: string;              // node, python, go, ...
+  framework?: string;
+  runtimeImage?: string;        // base image the model chose, e.g. node:20-slim
+  installCommand?: string;      // runs in `context`
+  buildCommand?: string;        // runs in `root`
+  startCommand?: string;        // runs in `root`; servers only
+  outputDir?: string;           // static only, relative to `root`
+  port: number;                 // container port the service listens on
+  portEvidence: string;         // where the port came from (file:line or how the command pins it)
+  envVars: string[];            // env var names this service reads (names only)
+  dependsOn: string[];          // other services it calls (their URLs must be injected via env at deploy)
+}
+
+// Per-service progress through dockerfile/lint/build/smoke. `hash` is the Dockerfile hash the stage ran on,
+// so a doctor-loop retry re-runs only the service whose Dockerfile changed.
+export interface ServiceStage {
+  status: 'success' | 'failed';
+  summary?: string;
+  hash?: string;
+}
+
+export interface ServiceRun {
+  dockerfile?: string;          // current Dockerfile content
+  dockerfileMode?: 'generated' | 'existing' | 'fixed';
+  image?: string;               // local image tag (the primary service uses imageTag(runId))
+  lint?: ServiceStage;
+  build?: ServiceStage;
+  smoke?: ServiceStage;
 }
 
 // Root-cause report format from the concept doc (§11).
@@ -95,7 +135,7 @@ export type RunEvent =
   | { type: 'node'; node: NodeId; status: NodeStatus; summary?: string; attempt?: number }
   | { type: 'log'; node: NodeId; line: string; ts: number }
   | { type: 'output'; node: NodeId; data: unknown }          // shown in the node's side panel
-  | { type: 'retry'; from: NodeId; to: NodeId; attempt: number; diagnosis: Diagnosis; patch?: ConfigPatch }
+  | { type: 'retry'; from: NodeId; to: NodeId; attempt: number; diagnosis: Diagnosis; patch?: ConfigPatch; service?: string }
   | { type: 'approval'; request: ApprovalRequest }           // pipeline pauses at 'approve'
   | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; diagnosis?: Diagnosis };
 
@@ -104,7 +144,8 @@ export interface RunState {
   config: RunConfig;
   nodes: Record<NodeId, { status: NodeStatus; summary?: string; attempt?: number; output?: unknown; logs: string[] }>;
   analysis?: AnalysisResult;
-  dockerfile?: string;
+  dockerfile?: string;          // the primary service's Dockerfile
+  services?: Record<string, ServiceRun>; // keyed by ServicePlan.name
   outputs: DeployOutputs;
   status: 'running' | 'awaiting-approval' | 'live' | 'failed' | 'torn-down';
   createdAt: number;

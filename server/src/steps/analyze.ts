@@ -1,10 +1,13 @@
-// Repository understanding: deterministic detection first, the LLM only fills the gaps.
+// Repository understanding: a fact inventory, then a model-made service plan validated against it.
+// The deterministic single-service detector below is kept as the fallback when planning fails.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { chatJson } from '../llm/ollama.js';
 import type { Step } from '../pipeline/step.js';
-import type { AnalysisResult } from '../types.js';
+import type { AnalysisResult, ServicePlan } from '../types.js';
 import { isSecretFile, readText, walk } from './common.js';
+import { buildInventory } from './inventory.js';
+import { finalize, normalizeImage, planServices } from './plan.js';
 
 export interface Detection {
   analysis: AnalysisResult;
@@ -227,59 +230,116 @@ async function fillGaps(dir: string, det: Detection, signal: AbortSignal): Promi
   return out;
 }
 
+// Single-service plan from the deterministic detector: used when the planner produced nothing usable.
+function fallbackService(det: Detection): ServicePlan | undefined {
+  const a = det.analysis;
+  if (a.runtime === 'unknown' || !a.port) return undefined;
+  return {
+    name: 'app',
+    root: '.',
+    context: '.',
+    dockerfile: 'Dockerfile',
+    existingDockerfile: a.dockerfile === 'present',
+    kind: 'server',
+    runtime: a.runtime,
+    framework: a.framework,
+    startCommand: a.entryCommand,
+    // Install from whichever manifest the detector found; the Dockerfile step adds the rest.
+    installCommand: a.dependencyFiles.includes('requirements.txt') ? 'pip install --no-cache-dir -r requirements.txt'
+      : a.dependencyFiles.includes('pyproject.toml') ? 'pip install --no-cache-dir .'
+      : a.dependencyFiles.includes('package.json') ? 'npm install'
+      : a.dependencyFiles.includes('go.mod') ? 'go mod download' : undefined,
+    port: a.port,
+    portEvidence: det.sources.port ?? 'detected',
+    envVars: a.envVars,
+    dependsOn: [],
+  };
+}
+
 export const analyze: Step = {
   id: 'analyze',
   async run(ctx) {
     const det = await detect(ctx.workdir);
-    for (const [k, v] of Object.entries(det.sources)) ctx.log(`${k}: ${v}`);
+    const inv = await buildInventory(ctx.workdir);
+    // The detector looks at the root package only; its warnings mean nothing in a multi-package repo.
+    if (inv.packages.length > 1) det.warnings = [];
     for (const w of det.warnings) ctx.log(`warning: ${w}`);
-    let analysis = det.analysis;
-    if (det.gaps.length) {
-      ctx.log(`asking the model to fill: ${det.gaps.join(', ')}`);
-      try {
-        const filled = await fillGaps(ctx.workdir, det, ctx.signal);
-        analysis = { ...analysis, ...filled };
-        for (const k of Object.keys(filled)) det.sources[k] = 'LLM';
-      } catch (err) {
-        ctx.log(`model unavailable (${err instanceof Error ? err.message : err}); continuing with detected values`);
-      }
-    }
-    if (ctx.run.config.appPort) {
-      analysis.port = ctx.run.config.appPort;
-      det.sources.port = 'user override';
-    }
-    analysis.envVars = [...new Set([...analysis.envVars, ...Object.keys(ctx.run.config.env ?? {})])].sort();
-    ctx.run.analysis = analysis;
+    ctx.log(`inventory: ${inv.packages.length} package(s) [${inv.packages.map((p) => p.dir).join(', ')}], ${inv.ports.length} port evidence line(s), ${inv.configs.length} config file(s)`);
+    for (const w of inv.workspaces) ctx.log(`workspaces from ${w.source}: ${w.patterns.join(', ')}`);
 
-    const missingEnv = analysis.envVars.filter((v) => v !== 'PORT' && v !== 'NODE_ENV' && !(ctx.run.config.env ?? {})[v]);
-    if (missingEnv.length) ctx.log(`env vars referenced but not provided: ${missingEnv.join(', ')}`);
-    if (analysis.runtime === 'unknown') {
+    const plan = await planServices(inv, { signal: ctx.signal, log: ctx.log });
+    let services = plan.services;
+    let source: string = plan.source;
+    if (!services.length) {
+      ctx.log('no usable service plan; falling back to single-service detection');
+      if (det.gaps.length) {
+        ctx.log(`asking the model to fill: ${det.gaps.join(', ')}`);
+        try {
+          const filled = await fillGaps(ctx.workdir, det, ctx.signal);
+          det.analysis = { ...det.analysis, ...filled };
+          for (const k of Object.keys(filled)) det.sources[k] = 'LLM';
+        } catch (err) {
+          ctx.log(`model unavailable (${err instanceof Error ? err.message : err}); continuing with detected values`);
+        }
+      }
+      if (ctx.run.config.appPort) det.analysis.port = ctx.run.config.appPort;
+      const f = fallbackService(det);
+      if (f) f.runtimeImage = normalizeImage(undefined, f.runtime, inv.pins.find((p) => p.dir === '.' && p.runtime === f.runtime)?.spec);
+      services = f ? finalize(inv, [f]) : [];
+      source = 'detection';
+    }
+    if (!services.length) {
       return {
         ok: false,
-        summary: 'Could not identify the application runtime',
-        error: 'No package.json, requirements.txt, pyproject.toml or go.mod found',
+        summary: 'Could not identify a deployable service',
+        error: plan.rejected.flat().join('\n') || 'No package.json, requirements.txt, pyproject.toml or go.mod found',
         diagnosis: {
           rootCause: 'Unsupported or unrecognised project layout',
-          evidence: `Top-level files: ${(await walk(ctx.workdir, 30)).join(', ')}`,
+          evidence: plan.rejected.at(-1)?.slice(0, 5).join('\n') || `Top-level files: ${(await walk(ctx.workdir, 30)).join(', ')}`,
           attemptedFix: 'none',
           result: 'not-fixed',
-          nextStep: 'BuildDoctor supports Node.js, Python and Go services; add a Dockerfile or a dependency manifest.',
+          nextStep: 'Add a Dockerfile, a dependency manifest, or set the application port in the run config.',
         },
       };
     }
-    if (!analysis.port) {
-      return {
-        ok: false,
-        summary: 'Could not determine the application port',
-        error: 'No port found in source and no framework default',
-        diagnosis: { rootCause: 'Unknown application port', evidence: 'No listen()/port pattern found', attemptedFix: 'none', result: 'not-fixed', nextStep: 'Set the application port in the run config.' },
-      };
+    const primary = services[0];
+    if (ctx.run.config.appPort && primary.port !== ctx.run.config.appPort) {
+      primary.port = ctx.run.config.appPort;
+      primary.portEvidence = 'user override';
     }
-    const label = [analysis.framework ?? analysis.runtime, analysis.port && `:${analysis.port}`].filter(Boolean).join(' ');
+    for (const s of services) {
+      ctx.log(`service ${s.name}: ${s.kind} at ${s.root} (context ${s.context}) · port ${s.port} [${s.portEvidence}] · ${s.existingDockerfile ? `existing ${s.dockerfile}` : `generate ${s.dockerfile}`}`);
+      for (const [k, v] of [['install', s.installCommand], ['build', s.buildCommand], ['start', s.startCommand], ['output', s.outputDir]] as const) if (v) ctx.log(`  ${k}: ${v}`);
+    }
+    for (const s of plan.skipped) ctx.log(`skipped ${s.root}: ${s.reason}`);
+
+    const provided = Object.keys(ctx.run.config.env ?? {});
+    const analysis: AnalysisResult = {
+      runtime: (['node', 'python', 'go'] as const).find((r) => r === primary.runtime) ?? (primary.root === '.' ? det.analysis.runtime : 'unknown'),
+      framework: primary.framework ?? (primary.root === '.' ? det.analysis.framework : undefined),
+      entryCommand: primary.startCommand,
+      port: primary.port,
+      envVars: [...new Set([...services.flatMap((s) => s.envVars), ...provided])].sort(),
+      dependencyFiles: [...new Set(services.flatMap((s) => inv.packages.find((p) => p.dir === s.root)?.manifests.map((m) => (s.root === '.' ? m : `${s.root}/${m}`)) ?? []))],
+      dockerfile: primary.existingDockerfile ? 'present' : 'missing',
+      services,
+    };
+    ctx.run.analysis = analysis;
+
+    const missingEnv = analysis.envVars.filter((v) => !/^(PORT|HOST|NODE_ENV)$/.test(v) && !(ctx.run.config.env ?? {})[v]);
+    if (missingEnv.length) ctx.log(`env vars referenced but not provided: ${missingEnv.join(', ')}`);
+    const label = services.length > 1 ? `${services.length} services: ${services.map((s) => `${s.name}:${s.port}`).join(', ')}` : `${analysis.framework ?? primary.runtime} :${primary.port}`;
     return {
       ok: true,
-      summary: `${label} · Dockerfile ${analysis.dockerfile}`,
-      output: { ...analysis, warnings: det.warnings, sources: det.sources, missingEnv },
+      summary: `${label} · Dockerfile ${services.length > 1 ? `${services.filter((s) => s.existingDockerfile).length} existing` : analysis.dockerfile}`,
+      output: {
+        ...analysis,
+        warnings: det.warnings,
+        sources: { plan: source, ...(source === 'detection' ? det.sources : {}) },
+        missingEnv,
+        plan: { source, attempts: plan.attempts, rejected: plan.rejected, skipped: plan.skipped },
+        inventory: { packages: inv.packages.map((p) => p.dir), workspaces: inv.workspaces, ports: inv.ports },
+      },
     };
   },
 };
