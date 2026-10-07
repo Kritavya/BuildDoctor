@@ -82,5 +82,6 @@ export const backend: Backend = isMock
       step: params.get('step') ?? undefined,
       play: params.get('play') === '1',
       speed: Number(params.get('speed') ?? '1') || 1,
+      scenario: params.get('scenario') ?? undefined,
     })
   : realBackend

@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Lock, X } from 'lucide-react'
-import type { NodeId } from '../contract'
+import type { NodeId, ServicePlan } from '../contract'
 import type { FormState } from '../form'
-import { NODE_META, STATUS_LABEL } from '../meta'
+import { NODE_META, PER_SERVICE, STATUS_LABEL } from '../meta'
 import type { LogEntry, NodeView, Phase } from '../state'
 import { AdvancedFields, EnvEditor, PortField, PortsChecklist, RegionSelect, RepoFields, SizePicker, type SetForm } from './fields'
 import { DiagnosisCard, OutputView } from './Output'
 import { isDiagnosis } from '../outputs'
 import { LogLines } from './Console'
+import { ServiceOutputView, ServiceSwitch } from './ServiceOutput'
 
 export type InspectorTab = 'parameters' | 'output' | 'logs'
 
@@ -15,6 +16,8 @@ interface Props {
   node: NodeId | null
   view?: NodeView
   logs: LogEntry[]
+  /** The run's service plan; several entries turn on the per-service output switcher. */
+  services?: ServicePlan[]
   form: FormState
   set: SetForm
   phase: Phase
@@ -98,9 +101,11 @@ function Params({ node, form, set, readOnly, detectedPort, approvalActions }: {
   }
 }
 
-export function Inspector({ node, view, logs, form, set, phase, detectedPort, approvalActions, initialTab, onClose }: Props) {
+export function Inspector({ node, view, logs, services, form, set, phase, detectedPort, approvalActions, initialTab, onClose }: Props) {
   const [tab, setTab] = useState<InspectorTab>(initialTab ?? 'parameters')
   const [shown, setShown] = useState<NodeId | null>(node)
+  const [svc, setSvc] = useState<string>()
+  const picked = useRef(false) // the user chose a service for this step; stop following failures
 
   // Keep the last node rendered while the panel slides out.
   useEffect(() => {
@@ -110,6 +115,7 @@ export function Inspector({ node, view, logs, form, set, phase, detectedPort, ap
   // Opening a step that has already produced something lands on its results.
   useEffect(() => {
     if (!node) return
+    picked.current = false
     if (initialTab) return setTab(initialTab)
     if (view && (view.outputs.length || view.diagnoses.length)) setTab('output')
     else if (view && view.status !== 'idle') setTab('logs')
@@ -117,6 +123,18 @@ export function Inspector({ node, view, logs, form, set, phase, detectedPort, ap
     // only when a different node is opened
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node])
+
+  // Follow the service that needs attention (the latest one that failed or got a fix in this step)
+  // until the user picks one; covers steps opened before their results arrive.
+  const planKey = services?.map((s) => s.name).join('|') ?? ''
+  const lastDiag = view?.diagnoses.at(-1)?.service
+  const failedSvc = view ? Object.entries(view.services).find(([, v]) => v.status === 'failed')?.[0] : undefined
+  useEffect(() => {
+    if (picked.current) return
+    const all = planKey ? planKey.split('|') : []
+    const want = lastDiag ?? failedSvc
+    setSvc(want && all.includes(want) ? want : all[0])
+  }, [node, planKey, lastDiag, failedSvc])
 
   const readOnly = phase !== 'setup'
   const id = node ?? shown
@@ -128,6 +146,8 @@ export function Inspector({ node, view, logs, form, set, phase, detectedPort, ap
   const visibleOutputs = outputs.filter((o) => !isDiagnosis(o))
   const outCount = visibleOutputs.length + diagnoses.length + extraDiag.length
   const nodeLogs = id ? logs.filter((l) => l.node === id) : []
+  const names = services && services.length > 1 && id && PER_SERVICE.includes(id) ? services.map((s) => s.name) : []
+  const current = svc && (svc === '*' || names.includes(svc)) ? svc : names[0]
 
   return (
     <aside className={'inspector' + (node ? ' is-open' : '')} aria-hidden={!node} aria-label="Step details">
@@ -169,6 +189,10 @@ export function Inspector({ node, view, logs, form, set, phase, detectedPort, ap
             )}
             {tab === 'output' && (
               <div className="insp-output">
+                {names.length > 0 && view && <ServiceSwitch names={names} value={current!} view={view} onChange={(v) => { picked.current = true; setSvc(v) }} />}
+                {names.length > 0 && current !== '*' && view && id ? (
+                  <ServiceOutputView node={id} svc={current!} view={view} logs={logs} plan={services!.find((s) => s.name === current)} />
+                ) : <>
                 {outCount === 0 && (
                   <div className="empty-note">
                     <p className="empty-title">No output yet</p>
@@ -180,6 +204,7 @@ export function Inspector({ node, view, logs, form, set, phase, detectedPort, ap
                 {[...visibleOutputs].reverse().map((o, i) => (
                   <OutputView key={'o' + i} data={o} index={visibleOutputs.length - 1 - i} total={visibleOutputs.length} />
                 ))}
+                </>}
               </div>
             )}
             {tab === 'logs' && (

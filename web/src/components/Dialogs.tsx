@@ -1,9 +1,9 @@
 import { useEffect, useRef, type ReactNode } from 'react'
-import { KeyRound, LoaderCircle, Package, Rocket, Server, ShieldHalf, ShieldCheck, TriangleAlert } from 'lucide-react'
-import type { ApprovalRequest, DeployOutputs, InstanceSize } from '../contract'
+import { Boxes, KeyRound, Link2, LoaderCircle, Package, Rocket, Server, ShieldHalf, ShieldCheck, TriangleAlert } from 'lucide-react'
+import type { ApprovalRequest, ApprovalService, DeployOutputs, InstanceSize } from '../contract'
 import { INSTANCE_SIZES } from '../meta'
 
-function Modal({ children, onClose, labelledBy }: { children: ReactNode; onClose: () => void; labelledBy: string }) {
+function Modal({ children, onClose, labelledBy, wide }: { children: ReactNode; onClose: () => void; labelledBy: string; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
   useEffect(() => {
@@ -11,7 +11,7 @@ function Modal({ children, onClose, labelledBy }: { children: ReactNode; onClose
   })
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null
-    ref.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
+    ref.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true })
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close.current()
     window.addEventListener('keydown', onKey)
     return () => {
@@ -21,7 +21,7 @@ function Modal({ children, onClose, labelledBy }: { children: ReactNode; onClose
   }, [])
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby={labelledBy} ref={ref}>
+      <div className={'modal' + (wide ? ' modal--wide' : '')} role="dialog" aria-modal="true" aria-labelledby={labelledBy} ref={ref}>
         {children}
       </div>
     </div>
@@ -30,10 +30,53 @@ function Modal({ children, onClose, labelledBy }: { children: ReactNode; onClose
 
 function actionIcon(a: string) {
   if (/^run container/i.test(a)) return <Rocket size={15} />
+  if (/docker network/i.test(a)) return <Link2 size={15} />
   if (/ec2 instance|existing instance/i.test(a)) return <Server size={15} />
   if (/ecr/i.test(a)) return <Package size={15} />
   if (/security group/i.test(a)) return <ShieldHalf size={15} />
   return <KeyRound size={15} />
+}
+
+/** Multi-service runs: one row per container, then what may still need an env value. */
+function ServicePlanList({ services }: { services: ApprovalService[] }) {
+  const gaps = services.filter((s) => s.unset.length || s.notes.length)
+  return (
+    <>
+      <ul className="approve-list approve-svcs">
+        {services.map((s) => (
+          <li key={s.name}>
+            <span className="approve-ico"><Boxes size={15} /></span>
+            <span className="approve-svc">
+              <span className="approve-svc-head">
+                <strong>{s.name}</strong>
+                <span className="approve-svc-meta">{s.kind === 'static' ? 'static' : 'server'} · port {s.port}</span>
+              </span>
+              <code className="approve-svc-image">{s.image}</code>
+              {Object.entries(s.injected).map(([k, v]) => (
+                <span key={k} className="approve-svc-env"><Link2 size={11} /> {k}=<code>{v}</code></span>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {gaps.length > 0 && (
+        <div className="env-gaps" role="note">
+          <p className="env-gaps-title"><TriangleAlert size={14} /> You may need to set some env vars</p>
+          <ul>
+            {gaps.map((s) => (
+              <li key={s.name}>
+                {s.unset.length > 0 && (
+                  <span>Env vars for <strong>{s.name}</strong> are missing: {s.unset.map((n) => <code key={n}>{n}</code>)}</span>
+                )}
+                {s.notes.map((n) => <span key={n} className="env-gaps-note">{n}</span>)}
+              </li>
+            ))}
+          </ul>
+          <p className="env-gaps-hint">If a service needs them, cancel and add them under Per-service variables; the form keeps this repo's services. Otherwise approve as is.</p>
+        </div>
+      )}
+    </>
+  )
 }
 
 export function ApprovalModal({ request, size, busy, missingPermissions, onApprove, onCancel, onDismiss }: {
@@ -46,21 +89,26 @@ export function ApprovalModal({ request, size, busy, missingPermissions, onAppro
   onDismiss: () => void
 }) {
   const price = INSTANCE_SIZES.find((s) => s.id === size)?.monthly
+  // Container lines and env gaps get their own structured section below the action list.
+  const multi = !!request.services && request.services.length > 1
   const blocked = !!missingPermissions?.length
   return (
-    <Modal onClose={onDismiss} labelledBy="approve-title">
+    <Modal onClose={onDismiss} labelledBy="approve-title" wide={multi}>
       <div className="modal-head">
         <span className="modal-icon modal-icon--brand"><ShieldCheck size={20} /></span>
         <div>
           <h2 id="approve-title" className="modal-title">Approve AWS changes</h2>
-          <p className="modal-sub">Your app passed local checks. BuildDoctor will make these changes in your account:</p>
+          <p className="modal-sub">
+            {multi ? `${request.services!.length === 2 ? 'Both' : `All ${request.services!.length}`} services passed local checks.` : 'Your app passed local checks.'} BuildDoctor will make these changes in your account:
+          </p>
         </div>
       </div>
       <ul className="approve-list">
-        {request.actions.map((a) => (
+        {(multi ? request.actions.filter((a) => !/^(Run container|Check |Env vars .* reads)/.test(a)) : request.actions).map((a) => (
           <li key={a}><span className="approve-ico">{actionIcon(a)}</span>{a}</li>
         ))}
       </ul>
+      {multi && <ServicePlanList services={request.services!} />}
       <p className="modal-note">
         {price ? <>Estimated cost about <strong>${price} a month</strong> while it runs. </> : null}
         You can remove everything with one click once the app is live.

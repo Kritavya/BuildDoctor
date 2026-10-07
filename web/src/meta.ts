@@ -30,6 +30,9 @@ export const NODE_META: Record<NodeId, NodeMeta> = {
   dashboard: { title: 'Dashboard', blurb: 'Optional metrics and logs', icon: Gauge, stage: 'cloud' },
 }
 
+/** Steps that run once per service; on multi-service runs their cards and panels break down by service. */
+export const PER_SERVICE: NodeId[] = ['dockerfile', 'lint', 'build', 'smoke', 'deploy', 'health']
+
 export const STATUS_LABEL: Record<NodeStatus, string> = {
   idle: 'Not started',
   running: 'Running',

@@ -3,9 +3,10 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { CircleCheck, GitBranch, RotateCcw, ShieldCheck, X } from 'lucide-react'
 import { backend, isMock, params } from './api'
 import type { AnalysisResult, DeployOutputs, NodeId, RunEvent } from './contract'
-import { defaultForm, fromRunConfig, repoLabel, toRunConfig, type FormState } from './form'
+import { defaultForm, envCount, fromRunConfig, repoLabel, toRunConfig, type FormState } from './form'
 import { NODE_META } from './meta'
 import { initialRun, reducer } from './state'
+import type { KnownService } from './components/fields'
 import { Canvas } from './components/Canvas'
 import { Console } from './components/Console'
 import { ApprovalModal, TeardownDialog } from './components/Dialogs'
@@ -21,7 +22,9 @@ const urlTab = params.get('tab') as InspectorTab | null
 const autoStart = isMock && params.has('step')
 
 export default function App() {
-  const [form, setFormState] = useState<FormState>(() => defaultForm(isMock))
+  const [form, setFormState] = useState<FormState>(() => defaultForm(isMock, params.get('scenario') ?? undefined))
+  // Services of the last analysed repo; kept across "Start a new run" so its per-service env can be filled in.
+  const [known, setKnown] = useState<{ repoUrl: string; services: KnownService[] }>()
   const setForm = useCallback((patch: Partial<FormState>) => setFormState((f) => ({ ...f, ...patch })), [])
   const [run, dispatch] = useReducer(reducer, undefined, initialRun)
   const [health, setHealth] = useState<HealthState>({ status: 'loading' })
@@ -61,7 +64,9 @@ export default function App() {
     if (ev.type === 'approval') setApprovalHidden(false)
     if (quiet.current) return
     if (ev.type === 'retry') {
-      toast('retry', `${NODE_META[ev.from].title} failed. Fix applied to ${NODE_META[ev.to].title}, trying attempt ${ev.attempt}.`)
+      toast('retry', ev.service
+        ? `${NODE_META[ev.from].title} failed for ${ev.service}. Fix applied to its ${NODE_META[ev.to].title}, trying attempt ${ev.attempt}.`
+        : `${NODE_META[ev.from].title} failed. Fix applied to ${NODE_META[ev.to].title}, trying attempt ${ev.attempt}.`)
     } else if (ev.type === 'done') {
       if (ev.status === 'failed' && cancelled.current) return
       toast(ev.status === 'live' ? 'ok' : 'info', ev.status === 'live' ? 'Your app is live.' : 'The run stopped. See the diagnosis.')
@@ -135,6 +140,15 @@ export default function App() {
   }, [deploy, form])
 
   useEffect(() => () => unsub.current?.(), [])
+
+  const repoUrl = form.repoUrl
+  useEffect(() => {
+    if (run.services && run.services.length > 1) {
+      setKnown({ repoUrl, services: run.services.map((s) => ({ name: s.name, kind: s.kind, port: s.port, envVars: s.envVars, dependsOn: s.dependsOn })) })
+    }
+    // only when a new plan arrives
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.services])
 
   const respond = async (approved: boolean) => {
     if (!run.runId) return
@@ -210,11 +224,12 @@ export default function App() {
       <div className="workspace">
         <div className="side" aria-hidden={!formOpen} inert={!formOpen}>
           <RunForm form={form} set={setForm} phase={run.phase} detectedPort={detectedPort} error={startError}
+            services={known && repoLabel(known.repoUrl) === repoLabel(form.repoUrl) ? known.services : undefined}
             onDeploy={() => void deploy(form)} onNewRun={newRun} />
         </div>
 
         <main className="center">
-          <ResultCard phase={run.phase} appUrl={run.done?.appUrl} diagnosis={run.done?.diagnosis}
+          <ResultCard phase={run.phase} appUrl={run.done?.appUrl} services={run.done?.services} diagnosis={run.done?.diagnosis}
             dashboard={run.dashboard} dashboardBusy={dashBusy} deleted={run.deleted}
             onDashboard={toggleDashboard} onTeardown={openTeardown}
             onShowDiagnosis={() => setSelected(failedNode ?? 'build')} />
@@ -241,7 +256,7 @@ export default function App() {
               </button>
             )}
 
-            <Inspector node={selected} view={selected ? run.nodes[selected] : undefined} logs={run.logs}
+            <Inspector node={selected} view={selected ? run.nodes[selected] : undefined} logs={run.logs} services={run.services}
               form={form} set={setForm} phase={run.phase} detectedPort={detectedPort}
               approvalActions={run.approval?.actions} initialTab={urlTab ?? undefined}
               onClose={() => setSelected(null)} />
@@ -257,7 +272,7 @@ export default function App() {
           missingPermissions={health.status === 'ok' ? health.data.awsPermissions?.missing : undefined}
           onApprove={() => void respond(true)} onCancel={() => void respond(false)} onDismiss={() => setApprovalHidden(true)} />
       )}
-      {teardownOpen && <TeardownDialog busy={tearing} resources={created} envVars={Object.keys(toRunConfig(form).env ?? {}).length} onConfirm={() => void teardown()} onClose={() => setTeardownOpen(false)} />}
+      {teardownOpen && <TeardownDialog busy={tearing} resources={created} envVars={envCount(toRunConfig(form))} onConfirm={() => void teardown()} onClose={() => setTeardownOpen(false)} />}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (

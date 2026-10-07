@@ -11,6 +11,8 @@ export interface FormState {
   branch: string
   appPort: string
   env: EnvRow[]
+  /** Multi-service runs: env for one service only, on top of `env`. Keyed by service name. */
+  serviceEnv: Record<string, EnvRow[]>
   region: string
   instanceType: InstanceSize
   openPorts: number[]
@@ -22,7 +24,15 @@ export interface FormState {
 let envSeq = 0
 export const newEnvRow = (key = '', value = ''): EnvRow => ({ id: ++envSeq, key, value })
 
-export function defaultForm(prefill: boolean): FormState {
+export function defaultForm(prefill: boolean, scenario?: string): FormState {
+  if (prefill && scenario === 'monorepo') {
+    return {
+      ...defaultForm(false),
+      repoUrl: 'https://github.com/acme/shop-monorepo',
+      env: [newEnvRow('LOG_LEVEL', 'info')],
+      serviceEnv: { api: [newEnvRow('DATABASE_URL', 'postgres://shop:s3cret@db.internal:5432/shop')] },
+    }
+  }
   return {
     repoUrl: prefill ? 'https://github.com/acme/notes-api' : '',
     branch: '',
@@ -30,6 +40,7 @@ export function defaultForm(prefill: boolean): FormState {
     env: prefill
       ? [newEnvRow('DATABASE_URL', 'postgres://notes:s3cret@db.internal:5432/notes'), newEnvRow('JWT_SECRET', 'k9-2f81c0ab77')]
       : [newEnvRow()],
+    serviceEnv: {},
     region: 'ap-south-1',
     instanceType: 't4g.small',
     openPorts: [80],
@@ -59,6 +70,7 @@ export function fromRunConfig(c: RunConfig): FormState {
     branch: c.branch ?? '',
     appPort: c.appPort ? String(c.appPort) : '',
     env: Object.keys(c.env ?? {}).map((k) => newEnvRow(k, '')),
+    serviceEnv: Object.fromEntries(Object.entries(c.serviceEnv ?? {}).map(([svc, e]) => [svc, Object.keys(e).map((k) => newEnvRow(k, ''))])),
     region: c.aws.region,
     instanceType: c.aws.instanceType,
     openPorts: c.aws.openPorts ?? [],
@@ -68,9 +80,15 @@ export function fromRunConfig(c: RunConfig): FormState {
   }
 }
 
-export function toRunConfig(f: FormState): RunConfig {
+const envMap = (rows: EnvRow[]) => {
   const env: Record<string, string> = {}
-  for (const r of f.env) if (r.key.trim()) env[r.key.trim()] = r.value
+  for (const r of rows) if (r.key.trim()) env[r.key.trim()] = r.value
+  return env
+}
+
+export function toRunConfig(f: FormState): RunConfig {
+  const env = envMap(f.env)
+  const serviceEnv = Object.fromEntries(Object.entries(f.serviceEnv).map(([svc, rows]) => [svc, envMap(rows)]).filter(([, e]) => Object.keys(e).length))
   let repoUrl = f.repoUrl.trim()
   if (!/^https?:\/\//.test(repoUrl)) repoUrl = 'https://' + repoUrl
   return {
@@ -78,6 +96,7 @@ export function toRunConfig(f: FormState): RunConfig {
     branch: f.branch.trim() || undefined,
     appPort: f.appPort ? Number(f.appPort) : undefined,
     env: Object.keys(env).length ? env : undefined,
+    ...(Object.keys(serviceEnv).length ? { serviceEnv } : {}),
     aws: {
       region: f.region,
       instanceType: f.instanceType,
@@ -91,4 +110,23 @@ export function toRunConfig(f: FormState): RunConfig {
 
 export function repoLabel(url: string): string {
   return url.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$|\/$/g, '')
+}
+
+const URL_WORDS = new Set(['URL', 'URI', 'ENDPOINT', 'ORIGIN', 'BASE', 'ADDR', 'ADDRESS', 'HOST', 'HOSTNAME', 'PORT'])
+
+/** The dependency whose address an env var names (API_URL -> api), as the server's addressRef() decides. */
+export function addressOf(envName: string, deps: string[]): string | undefined {
+  const tokens = envName.toUpperCase().split('_').filter(Boolean)
+  return deps.find((dep) => {
+    const want = dep.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean)
+    for (let i = 0; want.length && i + want.length <= tokens.length; i++) {
+      if (want.every((w, j) => tokens[i + j] === w) && tokens.slice(i + want.length).some((t) => URL_WORDS.has(t))) return true
+    }
+    return false
+  })
+}
+
+/** Number of env values a run config sends (global + per service). */
+export function envCount(c: RunConfig): number {
+  return Object.keys(c.env ?? {}).length + Object.values(c.serviceEnv ?? {}).reduce((n, e) => n + Object.keys(e).length, 0)
 }

@@ -3,7 +3,7 @@ import { ChevronRight, LoaderCircle, Rocket, RotateCcw } from 'lucide-react'
 import type { FormState } from '../form'
 import { validate } from '../form'
 import type { Phase } from '../state'
-import { AdvancedFields, EnvEditor, PortField, PortsChecklist, RegionSelect, RepoFields, SizePicker, type SetForm } from './fields'
+import { AdvancedFields, EnvEditor, PortField, PortsChecklist, RegionSelect, RepoFields, ServiceEnvEditor, SizePicker, type KnownService, type SetForm } from './fields'
 
 interface Props {
   form: FormState
@@ -11,11 +11,14 @@ interface Props {
   phase: Phase
   detectedPort?: number
   error?: string
+  /** The analysed services of this repo; the per-service env section shows when there are several. */
+  services?: KnownService[]
   onDeploy: () => void
   onNewRun: () => void
 }
 
-export function RunForm({ form, set, phase, detectedPort, error, onDeploy, onNewRun }: Props) {
+export function RunForm({ form, set, phase, detectedPort, error, services, onDeploy, onNewRun }: Props) {
+  const multi = !!services && services.length > 1
   const [touched, setTouched] = useState(false)
   const errors = touched ? validate(form) : {}
   const locked = phase !== 'setup'
@@ -46,7 +49,8 @@ export function RunForm({ form, set, phase, detectedPort, error, onDeploy, onNew
         <section className="form-section">
           <h2 className="form-section-title">App</h2>
           <PortField form={form} set={set} readOnly={locked} error={errors.appPort} detected={detectedPort} />
-          <EnvEditor form={form} set={set} readOnly={locked} />
+          <EnvEditor form={form} set={set} readOnly={locked} label={multi ? 'Shared variables' : undefined} />
+          {multi && <ServiceEnvEditor form={form} set={set} readOnly={locked} services={services!} />}
         </section>
 
         <section className="form-section">

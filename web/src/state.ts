@@ -1,14 +1,21 @@
 import { PIPELINE } from './contract'
 import type {
-  ApprovalRequest, DeployOutputs, Diagnosis, NodeId, NodeStatus, RunEvent,
+  AnalysisResult, ApprovalRequest, DeployOutputs, Diagnosis, NodeId, NodeStatus, RunEvent, ServiceOutput, ServicePlan,
 } from './contract'
+
+export interface ServiceView {
+  status: NodeStatus
+  summary?: string
+}
 
 export interface NodeView {
   status: NodeStatus
   summary?: string
   attempt?: number
   outputs: unknown[]
-  diagnoses: Array<Diagnosis & { attempt: number; to: NodeId }>
+  diagnoses: Array<Diagnosis & { attempt: number; to: NodeId; service?: string }>
+  /** Multi-service runs: each service's state within this step. */
+  services: Record<string, ServiceView>
 }
 
 export interface LogEntry {
@@ -21,6 +28,7 @@ export interface LogEntry {
 export interface RetryMark {
   attempt: number
   seq: number
+  service?: string
 }
 
 export type Phase = 'setup' | 'starting' | 'running' | 'awaiting-approval' | 'live' | 'failed' | 'torn-down'
@@ -33,7 +41,9 @@ export interface RunUi {
   retries: Record<string, RetryMark>
   retrySeq: number
   approval?: ApprovalRequest
-  done?: { status: 'live' | 'failed'; appUrl?: string; diagnosis?: Diagnosis }
+  done?: { status: 'live' | 'failed'; appUrl?: string; services?: Record<string, ServiceOutput>; diagnosis?: Diagnosis }
+  /** The analysis' service plan, once known; more than one entry means a multi-service run. */
+  services?: ServicePlan[]
   dashboard?: DeployOutputs['dashboard']
   deleted?: string[]
 }
@@ -52,7 +62,7 @@ export const retryKey = (from: NodeId, to: NodeId) => `${from}->${to}`
 
 function freshNodes(): Record<NodeId, NodeView> {
   const out = {} as Record<NodeId, NodeView>
-  for (const id of PIPELINE) out[id] = { status: 'idle', outputs: [], diagnoses: [] }
+  for (const id of PIPELINE) out[id] = { status: 'idle', outputs: [], diagnoses: [], services: {} }
   return out
 }
 
@@ -83,18 +93,25 @@ function applyEvent(s: RunUi, ev: RunEvent): RunUi {
       const logs = s.logs.length > 4000 ? s.logs.slice(-3000) : s.logs
       return { ...s, logs: [...logs, { id: ++logSeq, node: ev.node, line: ev.line, ts: ev.ts }] }
     }
-    case 'output':
-      return patchNode(s, ev.node, (n) => ({ ...n, outputs: [...n.outputs, ev.data] }))
+    case 'output': {
+      const planned = ev.node === 'analyze' && isPlan(ev.data) ? { services: ev.data.services } : {}
+      return patchNode({ ...s, ...planned }, ev.node, (n) => ({ ...n, outputs: [...n.outputs, ev.data] }))
+    }
+    case 'service':
+      return patchNode(s, ev.node, (n) => ({
+        ...n,
+        services: { ...n.services, [ev.service]: { status: ev.status, summary: ev.summary ?? n.services[ev.service]?.summary } },
+      }))
     case 'retry': {
       const seq = s.retrySeq + 1
       const next = patchNode(s, ev.from, (n) => ({
         ...n,
-        diagnoses: [...n.diagnoses, { ...ev.diagnosis, attempt: ev.attempt, to: ev.to }],
+        diagnoses: [...n.diagnoses, { ...ev.diagnosis, attempt: ev.attempt, to: ev.to, service: ev.service }],
       }))
       return {
         ...next,
         retrySeq: seq,
-        retries: { ...next.retries, [retryKey(ev.from, ev.to)]: { attempt: ev.attempt, seq } },
+        retries: { ...next.retries, [retryKey(ev.from, ev.to)]: { attempt: ev.attempt, seq, service: ev.service } },
       }
     }
     case 'approval':
@@ -109,7 +126,7 @@ function applyEvent(s: RunUi, ev: RunEvent): RunUi {
         ...s,
         phase: ev.status,
         approval: undefined,
-        done: { status: ev.status, appUrl: ev.appUrl, diagnosis: ev.diagnosis },
+        done: { status: ev.status, appUrl: ev.appUrl, services: ev.services, diagnosis: ev.diagnosis },
       }
     }
   }
@@ -139,6 +156,14 @@ export function reducer(s: RunUi, a: Action): RunUi {
     case 'tornDown':
       return { ...s, phase: 'torn-down', deleted: a.deleted }
   }
+}
+
+const isPlan = (d: unknown): d is AnalysisResult & { services: ServicePlan[] } =>
+  typeof d === 'object' && d !== null && Array.isArray((d as AnalysisResult).services) && (d as AnalysisResult).services!.length > 0
+
+/** Service names of a multi-service run (empty for single-service runs). */
+export function serviceNames(s: RunUi): string[] {
+  return s.services && s.services.length > 1 ? s.services.map((x) => x.name) : []
 }
 
 /** Latest output of a node, optionally narrowed by a type guard. */

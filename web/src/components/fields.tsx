@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from 'react'
 import { Check, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import { COMMON_PORTS, INSTANCE_SIZES, REGIONS } from '../meta'
-import { newEnvRow, type EnvRow, type FormState } from '../form'
+import { addressOf, newEnvRow, type EnvRow, type FormState } from '../form'
 
 export type SetForm = (patch: Partial<FormState>) => void
 
@@ -93,24 +93,87 @@ function EnvRowEditor({ row, readOnly, onChange, onRemove }: { row: EnvRow; read
   )
 }
 
-export function EnvEditor({ form, set, readOnly }: { form: FormState; set: SetForm; readOnly?: boolean }) {
-  const rows = form.env
-  const update = (i: number, r: EnvRow) => set({ env: rows.map((x, j) => (j === i ? r : x)) })
-  const remove = (i: number) => set({ env: rows.length === 1 ? [newEnvRow()] : rows.filter((_, j) => j !== i) })
+function EnvRows({ rows, onRows, readOnly }: { rows: EnvRow[]; onRows: (rows: EnvRow[]) => void; readOnly?: boolean }) {
+  const update = (i: number, r: EnvRow) => onRows(rows.map((x, j) => (j === i ? r : x)))
+  const remove = (i: number) => onRows(rows.length === 1 ? [newEnvRow()] : rows.filter((_, j) => j !== i))
   return (
-    <div className="field">
-      <span className="field-label">Environment variables <span className="field-optional">Optional</span></span>
+    <>
       <div className="env-list">
         {rows.map((r, i) => (
           <EnvRowEditor key={r.id} row={r} readOnly={readOnly} onChange={(x) => update(i, x)} onRemove={() => remove(i)} />
         ))}
       </div>
       {!readOnly && (
-        <button type="button" className="link-btn" onClick={() => set({ env: [...rows, newEnvRow()] })}>
+        <button type="button" className="link-btn" onClick={() => onRows([...rows, newEnvRow()])}>
           <Plus size={14} /> Add variable
         </button>
       )}
+    </>
+  )
+}
+
+export function EnvEditor({ form, set, readOnly, label = 'Environment variables' }: { form: FormState; set: SetForm; readOnly?: boolean; label?: string }) {
+  return (
+    <div className="field">
+      <span className="field-label">{label} <span className="field-optional">Optional</span></span>
+      <EnvRows rows={form.env} onRows={(env) => set({ env })} readOnly={readOnly} />
       <p className="field-msg">Values go to the container only. They are never logged or shown to the local model.</p>
+    </div>
+  )
+}
+
+export interface KnownService {
+  name: string
+  kind: 'server' | 'static'
+  port: number
+  envVars: string[]
+  dependsOn: string[]
+}
+
+const IGNORED_ENV = /^(PORT|HOST|HOSTNAME|NODE_ENV)$/
+
+/** Env for one service at a time (multi-service repos). Values override the shared ones for that service. */
+export function ServiceEnvEditor({ form, set, readOnly, services }: { form: FormState; set: SetForm; readOnly?: boolean; services: KnownService[] }) {
+  const [active, setActive] = useState(services[0]?.name)
+  const svc = services.find((s) => s.name === active) ?? services[0]
+  if (!svc) return null
+  const rows = form.serviceEnv[svc.name]?.length ? form.serviceEnv[svc.name] : [newEnvRow()]
+  const onRows = (next: EnvRow[]) => set({ serviceEnv: { ...form.serviceEnv, [svc.name]: next } })
+  const have = new Set([...form.env, ...rows].map((r) => r.key.trim()).filter(Boolean))
+  // Server services get a dependency's address wired in automatically; static builds cannot.
+  const wired = svc.kind === 'server' ? svc.envVars.filter((n) => !have.has(n) && addressOf(n, svc.dependsOn)) : []
+  const suggest = svc.envVars.filter((n) => !IGNORED_ENV.test(n) && !have.has(n) && !wired.includes(n))
+  const count = (name: string) => (form.serviceEnv[name] ?? []).filter((r) => r.key.trim()).length
+  return (
+    <div className="field">
+      <span className="field-label">Per-service variables <span className="field-optional">Optional</span></span>
+      <div className="seg" role="tablist" aria-label="Service">
+        {services.map((s) => (
+          <button key={s.name} type="button" role="tab" aria-selected={s.name === svc.name}
+            className={'seg-btn' + (s.name === svc.name ? ' is-on' : '')} onClick={() => setActive(s.name)}>
+            {s.name}
+            {count(s.name) > 0 && <span className="seg-count">{count(s.name)}</span>}
+          </button>
+        ))}
+      </div>
+      <EnvRows rows={rows} onRows={onRows} readOnly={readOnly} />
+      {suggest.length > 0 && (
+        <div className="env-suggest">
+          <span>{svc.name} reads</span>
+          {suggest.map((n) => (
+            <button key={n} type="button" className="env-suggest-btn" disabled={readOnly}
+              onClick={() => onRows([...rows.filter((r) => r.key.trim() || r.value), newEnvRow(n, '')])}>
+              {!readOnly && <Plus size={11} />}{n}
+            </button>
+          ))}
+        </div>
+      )}
+      {wired.length > 0 && (
+        <p className="field-msg">
+          {wired.map((n) => <code key={n}>{n}</code>)} {wired.length > 1 ? 'are' : 'is'} set to the address of {[...new Set(wired.map((n) => addressOf(n, svc.dependsOn)))].join(', ')} automatically.
+        </p>
+      )}
+      <p className="field-msg">Only the {svc.name} container gets these. A name set here wins over the shared value.</p>
     </div>
   )
 }

@@ -6,8 +6,8 @@ import {
 } from '@xyflow/react'
 import { Check, Clock, LoaderCircle, Minus, RotateCcw, X } from 'lucide-react'
 import { PIPELINE, RETRY_EDGES, type NodeId, type NodeStatus } from '../contract'
-import { NODE_META } from '../meta'
-import { retryKey, type NodeView, type RunUi } from '../state'
+import { NODE_META, PER_SERVICE } from '../meta'
+import { retryKey, serviceNames, type NodeView, type RunUi } from '../state'
 
 const W_WIDE = 196
 const W_STACKED = 176 // narrow canvases: slimmer cards so the local row still fits at a readable zoom
@@ -119,7 +119,27 @@ function computeViewport(l: Layout, w: number, h: number, focus?: NodeId) {
 
 // ---------- nodes ----------
 
-type StepData = { id: NodeId; view: NodeView; ghost: boolean }
+type StepData = { id: NodeId; view: NodeView; ghost: boolean; services: string[] }
+
+const MAX_CHIPS = 3
+
+function ServiceChips({ names, view }: { names: string[]; view: NodeView }) {
+  const shown = names.length > MAX_CHIPS ? names.slice(0, MAX_CHIPS - 1) : names
+  const rest = names.length - shown.length
+  return (
+    <div className="svc-chips" aria-label="Per-service status">
+      {shown.map((n) => {
+        const st = view.services[n]?.status ?? (view.status === 'skipped' ? 'skipped' : 'idle')
+        return (
+          <span key={n} className={`svc-chip is-${st}`} title={`${n}: ${st}${view.services[n]?.summary ? ` · ${view.services[n].summary}` : ''}`}>
+            <span className="svc-dot" />{n}
+          </span>
+        )
+      })}
+      {rest > 0 && <span className="svc-chip svc-chip--more" title={names.slice(shown.length).join(', ')}>+{rest}</span>}
+    </div>
+  )
+}
 type StageData = { label: string; sub: string; width: number; height: number }
 type StepNode = Node<StepData, 'step'>
 type StageNode = Node<StageData, 'stage'>
@@ -143,7 +163,8 @@ function Vitals({ status }: { status: NodeStatus }) {
 }
 
 const StepCard = memo(function StepCard({ data, selected, width }: NodeProps<StepNode>) {
-  const { id, view, ghost } = data
+  const { id, view, ghost, services } = data
+  const chips = services.length > 1 && PER_SERVICE.includes(id)
   const meta = NODE_META[id]
   const Icon = meta.icon
   const StatusIcon = STATUS_ICON[view.status]
@@ -151,7 +172,7 @@ const StepCard = memo(function StepCard({ data, selected, width }: NodeProps<Ste
   const isRetryTarget = RETRY_EDGES.some(([, to]) => to === id)
   const isRetrySource = RETRY_EDGES.some(([from]) => from === id)
   return (
-    <div style={{ width }} className={`step is-${view.status}${selected ? ' is-selected' : ''}${ghost ? ' is-ghost' : ''}`}>
+    <div style={{ width }} className={`step is-${view.status}${selected ? ' is-selected' : ''}${ghost ? ' is-ghost' : ''}${chips ? ' has-chips' : ''}`}>
       <Handle type="target" position={Position.Left} id="in" className="h h--side" />
       <Handle type="source" position={Position.Right} id="out" className="h h--side" />
       <Handle type="source" position={Position.Bottom} id="out-bottom" className="h h--hidden" />
@@ -169,7 +190,7 @@ const StepCard = memo(function StepCard({ data, selected, width }: NodeProps<Ste
         )}
       </div>
       <p className="step-summary" title={view.summary ?? meta.blurb}>{view.summary ?? meta.blurb}</p>
-      <Vitals status={view.status} />
+      {chips ? <ServiceChips names={services} view={view} /> : <Vitals status={view.status} />}
     </div>
   )
 })
@@ -189,7 +210,7 @@ function StageBox({ data }: NodeProps<StageNode>) {
 
 type FlowState = 'idle' | 'active' | 'done' | 'failed'
 type FlowEdgeT = Edge<{ state: FlowState; offset?: number }, 'flow'>
-type RetryEdgeT = Edge<{ attempt?: number; live: boolean }, 'retry'>
+type RetryEdgeT = Edge<{ attempt?: number; live: boolean; service?: string }, 'retry'>
 
 function FlowEdge(p: EdgeProps<FlowEdgeT>) {
   const [path] = getSmoothStepPath({
@@ -215,6 +236,7 @@ function RetryEdge(p: EdgeProps<RetryEdgeT>) {
           <div className={`retry-pill${p.data?.live ? ' is-live' : ''}`}
             style={{ transform: `translate(-50%, -50%) translate(${lx}px, ${ly}px)` }}>
             <RotateCcw size={11} strokeWidth={2.4} /> attempt {p.data?.attempt}
+            {p.data?.service && <span className="retry-svc">{p.data.service}</span>}
           </div>
         </EdgeLabelRenderer>
       )}
@@ -310,14 +332,17 @@ export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected])
 
+  const names = serviceNames(run)
+  const namesKey = names.join('|')
   const nodes = useMemo<Array<StepNode | StageNode>>(() => [
     ...layout.stages,
     ...PIPELINE.map<StepNode>((id) => ({
       id, type: 'step', position: layout.pos[id], width: layout.nodeW, height: H,
-      data: { id, view: run.nodes[id], ghost },
+      data: { id, view: run.nodes[id], ghost, services: names },
       selected: selected === id, draggable: false, connectable: false,
     })),
-  ], [run.nodes, selected, ghost, layout])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [run.nodes, selected, ghost, layout, namesKey])
 
   const edges = useMemo<Array<FlowEdgeT | RetryEdgeT>>(() => {
     const flow: FlowEdgeT[] = PIPELINE.slice(0, -1).map((from, i) => {
@@ -337,7 +362,7 @@ export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProp
       return {
         id: `r-${from}-${to}`, source: from, target: to, type: 'retry',
         sourceHandle: 'retry-out', targetHandle: 'retry-in',
-        data: { attempt: mark?.attempt, live }, selectable: false, focusable: false,
+        data: { attempt: mark?.attempt, live, service: mark?.service }, selectable: false, focusable: false,
         markerEnd: mark ? { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--retry)' } : undefined,
       }
     })

@@ -16,11 +16,11 @@ Every run goes through the same 13 steps:
 5. **Build image**: `docker build` for `linux/arm64` via the Docker Engine API, one image per service.
 6. **Smoke test**: run each image locally and wait up to 30 s for its port to answer HTTP (or hold a TCP connection for non-HTTP services).
 7. **Your approval**: the pipeline pauses and shows the exact AWS changes it will make. Nothing touches AWS before this.
-8. **Push to ECR**: create the repository `builddoctor/<repo-name>` if it is missing, then push the image tagged with the run id.
-9. **Security group**: create one in the default VPC with the app port open (or reuse one you tagged). Port 22 is never opened.
+8. **Push to ECR**: create the repository `builddoctor/<repo-name>` if it is missing, then push the image tagged with the run id. In a monorepo every service image goes into the same repository: the primary keeps `<run-id>`, the others are tagged `<run-id>-<service>`.
+9. **Security group**: create one in the default VPC with the app port open, or every service's port in a monorepo (or reuse one you tagged). Port 22 is never opened.
 10. **EC2 instance**: launch a t4g instance (Amazon Linux 2023, arm64, 16 GB gp3) with the BuildDoctor IAM instance role, or reuse one you tagged. Then wait for the SSM agent to come online.
-11. **Deploy**: store env vars as SSM SecureStrings, then use SSM Run Command to pull the image and start the container `app`.
-12. **Health check**: poll `http://<public-ip>:<port>/` for up to 90 s. On failure, collect `docker ps`, container logs and listening sockets over SSM and diagnose.
+11. **Deploy**: store env vars as SSM SecureStrings, then use SSM Run Command to pull the image and start the container `app`. A monorepo runs one container per service (`app-<service>`) on one instance, on a user-defined Docker network so services reach each other by container name. When a service reads an env var that names a service it calls (`API_URL` for `api`), and you did not set it, it gets that service's address (`http://app-api:4000`). Anything that cannot be mapped is listed at approval as "you may need to set X"; values are never invented.
+12. **Health check**: poll `http://<public-ip>:<port>/` for up to 90 s, for every service in a monorepo. On failure, collect `docker ps`, the failing container's logs and listening sockets over SSM and diagnose that service.
 13. **Dashboard**: an optional cAdvisor (metrics) + Dozzle (logs) pair on the instance, off by default and switched on from the UI.
 
 ## Architecture
@@ -127,7 +127,7 @@ npm run dev               # server on :4000, web on :5173
 
 Open <http://localhost:5173>.
 
-To try the UI without Docker, Ollama or AWS, open <http://localhost:5173/?mock=1>. This demo mode replays a scripted run, including a retry, the approval prompt, the dashboard and teardown. Add `&step=retry`, `&step=approval` or `&step=live` to jump to a checkpoint.
+To try the UI without Docker, Ollama or AWS, open <http://localhost:5173/?mock=1>. This demo mode replays a scripted run, including a retry, the approval prompt, the dashboard and teardown. Add `&step=retry`, `&step=approval` or `&step=live` to jump to a checkpoint. Add `&scenario=monorepo` for a two-service run (web + api) with a retry on the api build and two live URLs.
 
 `.env` settings:
 

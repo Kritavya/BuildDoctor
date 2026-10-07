@@ -1,11 +1,13 @@
 import { Activity, ExternalLink, LoaderCircle, ScrollText, Stethoscope, Trash2, CircleCheck } from 'lucide-react'
-import type { DeployOutputs, Diagnosis } from '../contract'
+import type { DeployOutputs, Diagnosis, ServiceOutput } from '../contract'
 import type { Phase } from '../state'
 import { CopyButton } from './Output'
 
 interface Props {
   phase: Phase
   appUrl?: string
+  /** Multi-service runs: every service's public URL. */
+  services?: Record<string, ServiceOutput>
   diagnosis?: Diagnosis
   dashboard?: DeployOutputs['dashboard']
   dashboardBusy: boolean
@@ -15,22 +17,52 @@ interface Props {
   onShowDiagnosis: () => void
 }
 
+function ServiceUrls({ services, appUrl }: { services: Record<string, ServiceOutput>; appUrl: string }) {
+  // The URL people open first (appUrl), then the rest in plan order.
+  const rows = Object.entries(services).filter(([, s]) => s.url).sort(([, a], [, b]) => Number(b.url === appUrl) - Number(a.url === appUrl))
+  return (
+    <ul className="svc-urls" aria-label="Service URLs">
+      {rows.map(([name, s]) => (
+        <li key={name} className="svc-url">
+          <span className={'svc-url-name' + (s.healthy === false ? ' is-bad' : '')} title={s.container}>
+            <span className="svc-dot" />{name}
+          </span>
+          <a className="svc-url-link" href={s.url} target="_blank" rel="noreferrer">{s.url!.replace(/^https?:\/\//, '')}</a>
+          {s.url === appUrl && <span className="svc-url-tag">main</span>}
+          <span className="svc-url-actions">
+            <CopyButton text={s.url!} label="Copy" />
+            <a className="icon-btn icon-btn--sm" href={s.url} target="_blank" rel="noreferrer" aria-label={`Open ${name}`} title={`Open ${name}`}>
+              <ExternalLink size={13} />
+            </a>
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export function ResultCard(p: Props) {
   if (p.phase === 'live' && p.appUrl) {
     const on = !!p.dashboard?.enabled
+    const multi = !!p.services && Object.keys(p.services).length > 1
     return (
-      <section className="result result--live" aria-label="Deployment result">
+      <section className={'result result--live' + (multi ? ' result--multi' : '')} aria-label="Deployment result">
         <div className="result-main">
           <span className="live-dot" aria-hidden />
           <div className="result-text">
-            <p className="result-title">Your app is live</p>
-            <div className="result-url">
-              <a href={p.appUrl} target="_blank" rel="noreferrer">{p.appUrl.replace(/^https?:\/\//, '')}</a>
-              <CopyButton text={p.appUrl} label="Copy URL" />
-              <a className="btn btn--secondary btn--sm" href={p.appUrl} target="_blank" rel="noreferrer">
-                Open <ExternalLink size={13} />
-              </a>
-            </div>
+            <p className="result-title">
+              Your app is live
+              {multi && <span className="result-count">{Object.keys(p.services!).length} services</span>}
+            </p>
+            {multi ? <ServiceUrls services={p.services!} appUrl={p.appUrl} /> : (
+              <div className="result-url">
+                <a href={p.appUrl} target="_blank" rel="noreferrer">{p.appUrl.replace(/^https?:\/\//, '')}</a>
+                <CopyButton text={p.appUrl} label="Copy URL" />
+                <a className="btn btn--secondary btn--sm" href={p.appUrl} target="_blank" rel="noreferrer">
+                  Open <ExternalLink size={13} />
+                </a>
+              </div>
+            )}
           </div>
         </div>
 
