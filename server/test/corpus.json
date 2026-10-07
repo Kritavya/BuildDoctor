@@ -1,0 +1,95 @@
+{
+  "_comment": "Real public repos for scripts/eval-corpus.ts. expectServices = deployable servers a person would expect; verified with git ls-remote on 2026-10-07 (commit = HEAD then).",
+  "repos": [
+    {
+      "url": "https://github.com/SeanPercy/turborepo-nestjs-nextjs",
+      "commit": "33eb58dca2",
+      "expectServices": 3,
+      "covers": "pnpm + turbo monorepo: NestJS api + two Next.js apps, shared workspace packages"
+    },
+    {
+      "url": "https://github.com/icmx/just-monorepo",
+      "commit": "0b8acfdb20",
+      "expectServices": 2,
+      "covers": "npm workspaces: Express server + webpack static client, file: deps on built libs"
+    },
+    {
+      "url": "https://github.com/marcuwynu23/monorepo-project-template",
+      "commit": "78c6a3344e",
+      "expectServices": 1,
+      "covers": "pnpm + turbo monorepo with an existing root Dockerfile that builds both apps into one image (backend + static frontend)"
+    },
+    {
+      "url": "https://github.com/shadcn-ui/next-template",
+      "commit": "d117bd0fd8",
+      "expectServices": 1,
+      "covers": "Next.js, no lockfile"
+    },
+    {
+      "url": "https://github.com/SafdarJamal/vite-template-react",
+      "commit": "480dc9128e",
+      "expectServices": 1,
+      "covers": "Vite React SPA; start script is a dev server with --open (dev-only scripts, needs static serving)"
+    },
+    {
+      "url": "https://github.com/nestjs/typescript-starter",
+      "commit": "a122dea65c",
+      "expectServices": 1,
+      "covers": "NestJS, build + start:prod"
+    },
+    {
+      "url": "https://github.com/heroku/node-js-getting-started",
+      "commit": "7233acafd6",
+      "expectServices": 1,
+      "covers": "Express, port from env default, Procfile"
+    },
+    {
+      "url": "https://github.com/jellydn/fastify-starter",
+      "commit": "2e898ec07c",
+      "expectServices": 1,
+      "covers": "Fastify + TypeScript, pnpm, existing multi-stage Dockerfile, .env.example"
+    },
+    {
+      "url": "https://github.com/chenlong-io/ts-koa-starter",
+      "commit": "bc3812b8e9",
+      "expectServices": 1,
+      "covers": "Koa; port only from env (.env + pm2 ecosystem config); start script is nodemon (dev-only)"
+    },
+    {
+      "url": "https://github.com/render-examples/fastapi",
+      "commit": "f829276c68",
+      "expectServices": 1,
+      "covers": "FastAPI, start command only in render.yaml"
+    },
+    {
+      "url": "https://github.com/heroku/python-getting-started",
+      "commit": "b754c78913",
+      "expectServices": 1,
+      "covers": "Django + gunicorn config file, Procfile"
+    },
+    {
+      "url": "https://github.com/render-examples/flask-hello-world",
+      "commit": "facfc73c44",
+      "expectServices": 1,
+      "covers": "Flask"
+    },
+    {
+      "url": "https://github.com/heroku/go-getting-started",
+      "commit": "9422a955e9",
+      "expectServices": 1,
+      "covers": "Go (gin); exits unless $PORT is set (port only from env)"
+    },
+    {
+      "url": "https://github.com/docker/welcome-to-docker",
+      "commit": "68c1b9f87c",
+      "expectServices": 1,
+      "covers": "Existing working Dockerfile (React build served by serve)"
+    },
+    {
+      "url": "https://github.com/vrudikov/typescript-rest-boilerplate",
+      "commit": "1a6774ffde",
+      "expectServices": 1,
+      "covers": "Broken existing Dockerfile (COPY ./dist that is never built, node:8); app also connects to MongoDB at startup. Old repo: broken Dockerfiles in active repos are rare"
+    }
+  ]
+}

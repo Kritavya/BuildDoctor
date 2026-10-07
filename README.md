@@ -10,11 +10,11 @@ Paste a GitHub repo URL; BuildDoctor containerises it, checks that it runs on yo
 Every run goes through the same 13 steps:
 
 1. **Clone repo**: shallow `git clone` of the repo and branch into `workspaces/<runId>/repo`.
-2. **Analyze project**: detect runtime (Node.js, Python, Go), framework, start command, port, env var names and dependency files. Detection is rule-based first; the local model (Ollama) fills in only what the rules could not find.
-3. **Dockerfile**: generate one, keep the existing one, or rewrite it after a failure (see [the four Dockerfile cases](#existing-dockerfile-the-four-cases)).
-4. **Lint Dockerfile**: run `hadolint` in its own container. Error-level findings send the run back to step 3.
-5. **Build image**: `docker build` for `linux/arm64` via the Docker Engine API.
-6. **Smoke test**: run the image locally and wait up to 30 s for the port to answer HTTP (or hold a TCP connection for non-HTTP services).
+2. **Analyze project**: build a fact inventory of the repo (file tree, every manifest and its scripts, workspace declarations, lockfiles, run/deploy config files, port evidence with file and line, env var names), then have the local model (Ollama) turn it into a **service plan**: one entry per deployable service with its directory, build context, install/build/start commands, port and the evidence for it. The plan is checked against the inventory (directories, scripts and files exist, ports have evidence, libraries are not services, every package with server code is covered) and the problems go back to the model, with up to 4 attempts in total. Monorepos (npm/pnpm/yarn workspaces, go.work, Cargo workspaces) come out as several services.
+3. **Dockerfile**: per service, generate one, keep the existing one, or rewrite it after a failure (see [the four Dockerfile cases](#existing-dockerfile-the-four-cases)).
+4. **Lint Dockerfile**: run `hadolint` in its own container, per service. Error-level findings send the run back to step 3.
+5. **Build image**: `docker build` for `linux/arm64` via the Docker Engine API, one image per service.
+6. **Smoke test**: run each image locally and wait up to 30 s for its port to answer HTTP (or hold a TCP connection for non-HTTP services).
 7. **Your approval**: the pipeline pauses and shows the exact AWS changes it will make. Nothing touches AWS before this.
 8. **Push to ECR**: create the repository `builddoctor/<repo-name>` if it is missing, then push the image tagged with the run id.
 9. **Security group**: create one in the default VPC with the app port open (or reuse one you tagged). Port 22 is never opened.
@@ -203,6 +203,8 @@ npm run lint -w web
   No Docker, Ollama or AWS account is needed for these.
 - **End-to-end** (`server/test/e2e.local.test.ts`) runs the real local pipeline (analyze, Dockerfile, lint, build, smoke) against the fixtures in `server/test/fixtures/`: a working Express app, a broken Express app and a FastAPI app. It needs Docker and Ollama with the model pulled, and is skipped automatically when either is missing. It never calls AWS.
 
+- **Corpus evaluation** (`npx tsx scripts/eval-corpus.ts --label <name>` in `server/`) runs the local pipeline against the real repos in `server/test/corpus.json` and writes `server/test/corpus-results.md`. It needs Docker and Ollama, never calls AWS, and removes the images and containers it creates.
+
 - **Live deploy.** We ran the full pipeline against [`heroku/node-js-getting-started`](https://github.com/heroku/node-js-getting-started) on a `t4g.micro` in `ap-south-1`. All 13 steps passed on the first attempt; the app, cAdvisor and Dozzle all answered HTTP 200, and teardown removed the instance, security group and ECR repository.
 
 ## Project structure
@@ -261,7 +263,7 @@ SSM Run Command and standard SecureString parameters cost nothing extra. Everyth
 - **The dashboards have no authentication.** cAdvisor and Dozzle are protected only by the `/32` IP allowlist.
 - **The model is small.** A 7B model sometimes writes Dockerfiles that fail validation or misdiagnoses a failure. The validator, the built-in templates and the retry cap limit the damage, but some repos will still need a manual fix.
 - **Repos must be public.** Cloning never prompts for credentials, so private repos need credentials embedded in the URL.
-- **Limited stack support.** We detect Node.js, Python and Go services only, and the app must sit at the repository root.
+- **Limited stack support.** The inventory reads any manifest, but the templates and checks are tuned for Node.js, Python and Go. The AWS steps still deploy only the primary service of a multi-service plan.
 - **The app port is public.** The app port, and any extra ports you request, are opened to `0.0.0.0/0`.
 - **The doctor loop only fixes some failures.** It can rewrite the Dockerfile or remap the port. It never edits application code and never invents env values.
 
