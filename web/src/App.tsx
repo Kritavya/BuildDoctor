@@ -37,6 +37,7 @@ export default function App() {
   const [created, setCreated] = useState<DeployOutputs['created'] | null | undefined>()
   const [toasts, setToasts] = useState<Toast[]>([])
   const unsub = useRef<() => void>(undefined)
+  const restoredTornDown = useRef(false)
   const cancelled = useRef(false)
   const quiet = useRef(false) // no toasts while a demo checkpoint fast-forwards
 
@@ -55,6 +56,8 @@ export default function App() {
 
   const onEvent = useCallback((ev: RunEvent) => {
     dispatch({ kind: 'event', ev })
+    // Teardown is not a pipeline event, so a replayed torn-down run would otherwise end at "live".
+    if (ev.type === 'done' && restoredTornDown.current) dispatch({ kind: 'tornDown', deleted: [] })
     if (ev.type === 'approval') setApprovalHidden(false)
     if (quiet.current) return
     if (ev.type === 'retry') {
@@ -88,6 +91,9 @@ export default function App() {
     if (!id) return
     backend.getRun(id).then(
       (state) => {
+        // A finished-and-removed run only reopens from an explicit ?run= link; a plain refresh starts fresh.
+        if (state.status === 'torn-down' && !params.get('run')) return rememberRun(undefined)
+        restoredTornDown.current = state.status === 'torn-down'
         setFormState(fromRunConfig(state.config))
         setFormOpen(false)
         setConsoleOpen(true)
@@ -104,6 +110,7 @@ export default function App() {
     cancelled.current = false
     try {
       const id = await backend.start(toRunConfig(f))
+      restoredTornDown.current = false
       if (params.get('form') !== '1') setFormOpen(false)
       if (params.get('console') !== '0') setConsoleOpen(true)
       follow(id)
