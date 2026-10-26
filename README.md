@@ -138,6 +138,9 @@ To try the UI without Docker, Ollama or AWS, open <http://localhost:5173/?mock=1
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Model used for analysis, Dockerfiles and diagnosis |
 | `PORT` | `4000` | API server port (the Vite dev proxy expects 4000) |
+| `LLM_PROVIDER` | `ollama` | Default model provider: `ollama` (local) or `groq`; each run can switch in the form |
+| `GROQ_API_KEY` | none | Enables Groq. Repo facts (file tree, manifests, logs) are sent to Groq; env var values never are |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq model; its reasoning streams into the model panel |
 
 ## Using it
 
