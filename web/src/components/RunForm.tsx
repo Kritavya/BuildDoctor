@@ -3,7 +3,7 @@ import { ChevronRight, LoaderCircle, Rocket, RotateCcw } from 'lucide-react'
 import type { FormState } from '../form'
 import { validate } from '../form'
 import type { Phase } from '../state'
-import { AdvancedFields, EnvEditor, PortField, PortsChecklist, RegionSelect, RepoFields, ServiceEnvEditor, SizePicker, type KnownService, type SetForm } from './fields'
+import { AdvancedFields, EnvEditor, ModelPicker, PortField, PortsChecklist, RegionSelect, RepoFields, ServiceEnvEditor, SizePicker, type KnownService, type SetForm } from './fields'
 
 interface Props {
   form: FormState
@@ -15,9 +15,11 @@ interface Props {
   services?: KnownService[]
   onDeploy: () => void
   onNewRun: () => void
+  localModel: string
+  groq?: { ready: boolean; model: string }
 }
 
-export function RunForm({ form, set, phase, detectedPort, error, services, onDeploy, onNewRun }: Props) {
+export function RunForm({ form, set, phase, detectedPort, error, services, onDeploy, onNewRun, localModel, groq }: Props) {
   const multi = !!services && services.length > 1
   const [touched, setTouched] = useState(false)
   const errors = touched ? validate(form) : {}
@@ -51,6 +53,11 @@ export function RunForm({ form, set, phase, detectedPort, error, services, onDep
           <PortField form={form} set={set} readOnly={locked} error={errors.appPort} detected={detectedPort} />
           <EnvEditor form={form} set={set} readOnly={locked} label={multi ? 'Shared variables' : undefined} />
           {multi && <ServiceEnvEditor form={form} set={set} readOnly={locked} services={services!} />}
+        </section>
+
+        <section className="form-section">
+          <h2 className="form-section-title">Model</h2>
+          <ModelPicker form={form} set={set} readOnly={locked} localModel={localModel} groq={groq} />
         </section>
 
         <section className="form-section">

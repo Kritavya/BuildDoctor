@@ -5,7 +5,7 @@ import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import { approvalPlan, awsSteps, setDashboard, teardown } from './aws/steps.js';
-import { MODEL, PROVIDER, ollamaReady } from './llm/ollama.js';
+import { GROQ_MODEL, LOCAL_MODEL, PROVIDER, groqConfigured, groqReady, ollamaReady } from './llm/ollama.js';
 import { Engine, WORKSPACES } from './pipeline/engine.js';
 import path from 'node:path';
 import { RunStore } from './pipeline/store.js';
@@ -109,13 +109,17 @@ export function createApp(
   });
 
   app.get('/api/health/local', async (_req, res) => {
-    const [dockerOk, ollama, awsAccount] = await Promise.all([
+    const [dockerOk, ollama, groq, awsAccount] = await Promise.all([
       docker.ping().then(() => true, () => false),
       ollamaReady(),
+      groqReady(),
       callerAccount(),
     ]);
     const awsPermissions = awsAccount ? await deployPermissions() : undefined;
-    res.json({ docker: dockerOk, ollama, provider: PROVIDER, model: MODEL, awsAccount, awsPermissions });
+    res.json({
+      docker: dockerOk, ollama, model: LOCAL_MODEL, awsAccount, awsPermissions,
+      llm: { default: PROVIDER === 'groq' ? 'groq' : 'local', groq: groqConfigured() ? { ready: groq, model: GROQ_MODEL } : undefined },
+    });
   });
 
   return app;
@@ -155,6 +159,8 @@ async function deployPermissions(): Promise<{ ok: boolean; missing: string[] }> 
 function validateConfig(b: unknown): string | undefined {
   const c = b as Partial<RunConfig> | undefined;
   if (!c || typeof c.repoUrl !== 'string' || !/^(https:\/\/|git@)/.test(c.repoUrl)) return 'repoUrl must be an https:// or git@ URL';
+  if (c.llm !== undefined && c.llm !== 'local' && c.llm !== 'groq') return 'llm must be "local" or "groq"';
+  if (c.llm === 'groq' && !groqConfigured()) return 'Groq is not configured on the server (set GROQ_API_KEY in .env)';
   if (c.branch !== undefined && (typeof c.branch !== 'string' || !/^[\w./-]+$/.test(c.branch))) return 'invalid branch';
   if (c.appPort !== undefined && !(Number.isInteger(c.appPort) && c.appPort > 0 && c.appPort < 65536)) return 'invalid appPort';
   if (c.env !== undefined && !isStringMap(c.env)) return 'env must be a string map';

@@ -10,6 +10,10 @@ export interface LlmCall {
   service?: string
   label: string
   text: string
+  /** reasoning trace from reasoning models (live only) */
+  thinking: string
+  /** "groq · openai/gpt-oss-120b" or "local · qwen2.5-coder:7b" */
+  model?: string
   status: 'streaming' | 'done' | 'failed'
   /** client clock when the call started (or was first seen) */
   seenAt: number
@@ -52,14 +56,14 @@ export const llmStore = {
     if (!known) {
       // a delta or end can arrive first after reconnecting mid-call
       const call: LlmCall = {
-        id: ev.id, node: ev.node, service: ev.service, label: ev.label, text: '', status: 'streaming',
+        id: ev.id, node: ev.node, service: ev.service, label: ev.label, text: '', thinking: '', model: ev.model, status: 'streaming',
         seenAt: Date.now() - (ev.ms ?? 0), ms: 0, tokens: 0,
       }
       set({ calls: [...state.calls, call], active: ev.id })
       if (ev.phase === 'start') return
     }
     if (ev.phase === 'delta') {
-      patch(ev.id, (c) => ({ ...c, text: c.text + (ev.text ?? ''), ms: ev.ms ?? c.ms, tokens: ev.tokens ?? c.tokens }))
+      patch(ev.id, (c) => ({ ...c, text: c.text + (ev.text ?? ''), thinking: c.thinking + (ev.thinking ?? ''), ms: ev.ms ?? c.ms, tokens: ev.tokens ?? c.tokens }))
     } else if (ev.phase === 'end') {
       patch(ev.id, (c) => ({
         ...c, text: ev.text ?? c.text, status: ev.ok === false ? 'failed' : 'done', ms: ev.ms ?? c.ms, tokens: ev.tokens ?? c.tokens,

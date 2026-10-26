@@ -612,7 +612,7 @@ export function createMockBackend(opts: MockOptions): Backend {
     mock: true,
     health: () =>
       new Promise<LocalHealth>((r) =>
-        setTimeout(() => r({ docker: true, ollama: true, model: 'qwen2.5-coder:7b', awsAccount: '1720-8394-4099' }), 700),
+        setTimeout(() => r({ docker: true, ollama: true, model: 'qwen2.5-coder:7b', awsAccount: '1720-8394-4099', llm: { default: 'local', groq: { ready: true, model: 'openai/gpt-oss-120b' } } }), 700),
       ),
     async start(c) {
       cfg = c

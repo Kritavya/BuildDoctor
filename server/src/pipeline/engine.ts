@@ -142,7 +142,8 @@ export class Engine {
       let result;
       try {
         // Model calls made inside the step are attributed to this run and node.
-        result = await llmScope.run({ runId: run.id, node, emit }, () => step.run(ctx));
+        const provider = run.config.llm === 'groq' ? 'groq' : run.config.llm === 'local' ? 'ollama' : undefined;
+        result = await llmScope.run({ runId: run.id, node, emit, provider }, () => step.run(ctx));
       } catch (err) {
         result = { ok: false as const, summary: `${node} crashed`, error: errMsg(err) };
       }

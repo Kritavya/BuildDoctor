@@ -1,4 +1,4 @@
-import { Cloud, Container, Cpu, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Cloud, Container, Cpu, PanelLeftClose, PanelLeftOpen, Zap } from 'lucide-react'
 import type { LocalHealth } from '../api'
 import type { Phase } from '../state'
 
@@ -83,6 +83,11 @@ export function TopBar({ health, phase, repo, mock, formOpen, onToggleForm }: {
             <Pill ok={health.data.ollama} icon={<Cpu size={13} />} label="Local model (Ollama)"
               value={health.data.ollama ? health.data.model : 'Not running'}
               title={health.data.ollama ? `Using ${health.data.model}` : 'Run "ollama serve" to enable Dockerfile drafting'} />
+            {health.data.llm?.groq && (
+              <Pill ok={health.data.llm.groq.ready} icon={<Zap size={13} />} label="Groq"
+                value={health.data.llm.groq.ready ? health.data.llm.groq.model : 'Unreachable'}
+                title={health.data.llm.groq.ready ? `Groq ready: ${health.data.llm.groq.model}` : 'GROQ_API_KEY is set but Groq did not answer'} />
+            )}
             <Pill ok={!!health.data.awsAccount && health.data.awsPermissions?.ok !== false} icon={<Cloud size={13} />} label="AWS"
               value={!health.data.awsAccount ? 'No credentials' : health.data.awsPermissions?.ok === false ? 'Permissions missing' : health.data.awsAccount}
               title={!health.data.awsAccount ? 'Configure AWS credentials to deploy'

@@ -19,9 +19,13 @@ export interface ChatOptions {
 }
 
 const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+// Default provider; each run can override it (RunConfig.llm, carried in the llm scope).
 export const PROVIDER: 'ollama' | 'groq' = process.env.LLM_PROVIDER === 'groq' ? 'groq' : 'ollama';
 const GROQ_URL = 'https://api.groq.com/openai/v1';
-export const MODEL = PROVIDER === 'groq' ? (process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b') : (process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b');
+export const LOCAL_MODEL = process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b';
+export const GROQ_MODEL = process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b';
+export const MODEL = PROVIDER === 'groq' ? GROQ_MODEL : LOCAL_MODEL;
+export const groqConfigured = () => !!process.env.GROQ_API_KEY;
 // Reasoning models (qwen3, ...): OLLAMA_THINK=false turns their thinking trace off; unset leaves the request unchanged.
 const THINK = process.env.OLLAMA_THINK === undefined ? undefined : process.env.OLLAMA_THINK === 'true';
 
@@ -40,8 +44,8 @@ const DEFAULT_LABEL: Partial<Record<NodeId, string>> = {
 };
 
 export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
-  if (PROVIDER === 'groq') return chatGroq(messages, opts);
-  const call = track(llmScope.getStore(), opts);
+  if ((llmScope.getStore()?.provider ?? PROVIDER) === 'groq') return chatGroq(messages, opts);
+  const call = track(llmScope.getStore(), opts, `local · ${LOCAL_MODEL}`);
   let text = '';
   try {
     const res = await fetch(`${OLLAMA_URL}/api/chat`, {
@@ -49,7 +53,7 @@ export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Pro
       headers: { 'content-type': 'application/json' },
       signal: opts.signal,
       body: JSON.stringify({
-        model: MODEL,
+        model: LOCAL_MODEL,
         messages,
         stream: true,
         think: THINK,
@@ -123,7 +127,7 @@ export async function readStream(res: Response, onText: (t: string) => void): Pr
 }
 
 // start/end go to the run history; deltas are batched every DELTA_MS and only broadcast (see RunStore.emit).
-function track(scope: LlmScope | undefined, opts: ChatOptions) {
+function track(scope: LlmScope | undefined, opts: ChatOptions, model?: string) {
   if (!scope) return undefined;
   const id = nanoid(8);
   const { node } = scope;
@@ -150,7 +154,7 @@ function track(scope: LlmScope | undefined, opts: ChatOptions) {
     pending = '';
     pendingThinking = '';
   };
-  send({ phase: 'start' });
+  send({ phase: 'start', ...(model ? { model } : {}) });
   return {
     delta(t: string, thinking = false) {
       if (ended) return;
@@ -170,11 +174,10 @@ function track(scope: LlmScope | undefined, opts: ChatOptions) {
 }
 
 export async function ollamaReady(): Promise<boolean> {
-  if (PROVIDER === 'groq') return groqReady();
   try {
     const res = await fetch(`${OLLAMA_URL}/api/tags`);
     const { models } = (await res.json()) as { models: Array<{ name: string }> };
-    return models.some((m) => m.name === MODEL);
+    return models.some((m) => m.name === LOCAL_MODEL);
   } catch {
     return false;
   }
@@ -193,7 +196,7 @@ function reasoningParams(model: string): Record<string, unknown> {
 }
 
 async function chatGroq(messages: ChatMessage[], opts: ChatOptions): Promise<string> {
-  const call = track(llmScope.getStore(), opts);
+  const call = track(llmScope.getStore(), opts, `groq · ${GROQ_MODEL}`);
   let text = '';
   try {
     for (let attempt = 0; ; attempt++) {
@@ -202,13 +205,13 @@ async function chatGroq(messages: ChatMessage[], opts: ChatOptions): Promise<str
         headers: { 'content-type': 'application/json', authorization: `Bearer ${groqKey()}` },
         signal: opts.signal,
         body: JSON.stringify({
-          model: MODEL,
+          model: GROQ_MODEL,
           messages,
           stream: true,
           temperature: opts.temperature ?? 0.2,
           max_completion_tokens: 8192,
           ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
-          ...reasoningParams(MODEL),
+          ...reasoningParams(GROQ_MODEL),
         }),
       });
       // Free-tier rate limits: wait as told and retry a few times.
@@ -278,10 +281,11 @@ export async function readSse(res: Response, onText: (t: string, thinking: boole
 }
 
 let groqOk: { at: number; ok: boolean } | undefined;
-async function groqReady(): Promise<boolean> {
+export async function groqReady(): Promise<boolean> {
+  if (!groqConfigured()) return false;
   if (groqOk && Date.now() - groqOk.at < 60_000) return groqOk.ok;
   try {
-    const res = await fetch(`${GROQ_URL}/models/${encodeURIComponent(MODEL)}`, { headers: { authorization: `Bearer ${groqKey()}` }, signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${GROQ_URL}/models/${GROQ_MODEL.split("/").map(encodeURIComponent).join("/")}`, { headers: { authorization: `Bearer ${groqKey()}` }, signal: AbortSignal.timeout(5000) });
     groqOk = { at: Date.now(), ok: res.ok };
   } catch {
     groqOk = { at: Date.now(), ok: false };

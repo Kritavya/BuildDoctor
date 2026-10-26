@@ -55,7 +55,7 @@ export function LlmPanel({ model, visible, onExpandedChange }: Props) {
       <button type="button" className={`llm-pill${live ? ' is-live' : ''}`} onClick={() => { setMinimised(false); setOpen(true) }}
         aria-label="Open the local model panel">
         <span className={`llm-dot${live ? ' is-live' : ''}`} />
-        <span className="llm-pill-name">Local model</span>
+        <span className="llm-pill-name">{(live ?? calls[calls.length - 1])?.model?.startsWith('groq') ? 'Groq' : 'Local model'}</span>
         <span className="llm-pill-sep">·</span>
         <span className="llm-pill-label">{live ? live.label : last ? `${last.label} · ${secs(last.ms)}` : 'idle'}</span>
       </button>
@@ -67,7 +67,7 @@ export function LlmPanel({ model, visible, onExpandedChange }: Props) {
       <header className="llm-head">
         <span className={`llm-dot${live ? ' is-live' : shown?.status === 'failed' ? ' is-failed' : shown ? ' is-done' : ''}`} />
         <div className="llm-titles">
-          <p className="llm-title">Local model <span className="llm-model">· {model}</span></p>
+          <p className="llm-title">{shown?.model?.startsWith('groq') ? 'Groq' : 'Local model'} <span className="llm-model">· {shown?.model?.split(' · ')[1] ?? model}</span></p>
           <p className="llm-label" title={shown?.label}>{shown ? shown.label : 'Waiting for the first model call'}</p>
         </div>
         <button type="button" className={`icon-btn${pinned ? ' is-on' : ''}`} aria-pressed={pinned} onClick={() => setPinned((p) => !p)}
@@ -124,7 +124,13 @@ function Stream({ call }: { call: LlmCall }) {
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28
       }}>
       <span className="llm-where">{NODE_META[call.node].title}{call.service ? ` · ${call.service}` : ''}</span>
-      {call.text ? tint(call.text) : streaming ? <span className="llm-reading">Reading the prompt…</span> : <span className="llm-reading">No output.</span>}
+      {call.thinking && (
+        <span className={`llm-thinking${call.text ? ' is-done' : ''}`}>
+          <span className="llm-thinking-label">{call.text ? 'Thought' : 'Thinking…'}</span>
+          {call.thinking}
+        </span>
+      )}
+      {call.text ? tint(call.text) : call.thinking ? null : streaming ? <span className="llm-reading">Reading the prompt…</span> : <span className="llm-reading">No output.</span>}
       {streaming && <span className="llm-caret" aria-hidden />}
     </pre>
   )

@@ -192,6 +192,37 @@ export function RegionSelect({ form, set, readOnly }: { form: FormState; set: Se
   )
 }
 
+export function ModelPicker({ form, set, readOnly, localModel, groq }: {
+  form: FormState; set: SetForm; readOnly?: boolean; localModel: string; groq?: { ready: boolean; model: string }
+}) {
+  const name = useId()
+  const opts = [
+    { id: 'local' as const, name: 'Local', model: localModel, hint: 'Runs on this machine; your code never leaves it.', off: false },
+    {
+      id: 'groq' as const, name: 'Groq', model: groq?.model ?? 'not configured',
+      hint: groq ? (groq.ready ? 'Cloud, much faster and more accurate. Repo facts are sent to Groq; env values never are.' : 'Key set but Groq is not reachable right now.') : 'Add GROQ_API_KEY to .env to enable.',
+      off: !groq?.ready,
+    },
+  ]
+  return (
+    <fieldset className="field" disabled={readOnly}>
+      <legend className="field-label">Model</legend>
+      <div className="size-list">
+        {opts.map((o) => (
+          <label key={o.id} className={'size-opt' + (form.llm === o.id ? ' is-on' : '') + (o.off ? ' is-disabled' : '')}>
+            <input type="radio" name={name} value={o.id} checked={form.llm === o.id} disabled={o.off}
+              onChange={() => set({ llm: o.id })} />
+            <span className="size-main">
+              <span className="size-name">{o.name} <code className="model-id">{o.model}</code></span>
+              <span className="size-hint">{o.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  )
+}
+
 export function SizePicker({ form, set, readOnly }: { form: FormState; set: SetForm; readOnly?: boolean }) {
   const name = useId()
   return (

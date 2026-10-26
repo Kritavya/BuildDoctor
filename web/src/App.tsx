@@ -28,7 +28,10 @@ export default function App() {
   const [form, setFormState] = useState<FormState>(() => defaultForm(isMock, params.get('scenario') ?? undefined))
   // Services of the last analysed repo; kept across "Start a new run" so its per-service env can be filled in.
   const [known, setKnown] = useState<{ repoUrl: string; services: KnownService[] }>()
-  const setForm = useCallback((patch: Partial<FormState>) => setFormState((f) => ({ ...f, ...patch })), [])
+  const setForm = useCallback((patch: Partial<FormState>) => {
+    if (patch.llm) saveModelChoice(patch.llm)
+    setFormState((f) => ({ ...f, ...patch }))
+  }, [])
   const [run, dispatch] = useReducer(reducer, undefined, initialRun)
   const [health, setHealth] = useState<HealthState>({ status: 'loading' })
   const [selected, setSelected] = useState<NodeId | null>(urlNode && urlNode in NODE_META ? urlNode : null)
@@ -57,7 +60,12 @@ export default function App() {
 
   useEffect(() => {
     backend.health().then(
-      (data) => setHealth({ status: 'ok', data }),
+      (data) => {
+        setHealth({ status: 'ok', data })
+        // Model choice: what this browser picked last, else the server default; Groq only when reachable.
+        const saved = readModelChoice() ?? data.llm?.default ?? 'local'
+        setFormState((f) => ({ ...f, llm: saved === 'groq' && !data.llm?.groq?.ready ? 'local' : saved }))
+      },
       () => setHealth({ status: 'error' }),
     )
   }, [])
@@ -235,7 +243,9 @@ export default function App() {
         <div className="side" aria-hidden={!formOpen} inert={!formOpen}>
           <RunForm form={form} set={setForm} phase={run.phase} detectedPort={detectedPort} error={startError}
             services={known && repoLabel(known.repoUrl) === repoLabel(form.repoUrl) ? known.services : undefined}
-            onDeploy={() => void deploy(form)} onNewRun={newRun} />
+            onDeploy={() => void deploy(form)} onNewRun={newRun}
+            localModel={health.status === 'ok' ? health.data.model : 'qwen2.5-coder:7b'}
+            groq={health.status === 'ok' ? health.data.llm?.groq : undefined} />
         </div>
 
         <main className="center">
@@ -323,4 +333,21 @@ function readRememberedRun(): string | null {
   } catch {
     return null
   }
+}
+
+const MODEL_KEY = 'builddoctor:model'
+
+function readModelChoice(): 'local' | 'groq' | null {
+  try {
+    const v = localStorage.getItem(MODEL_KEY)
+    return v === 'local' || v === 'groq' ? v : null
+  } catch {
+    return null
+  }
+}
+
+function saveModelChoice(v: 'local' | 'groq') {
+  try {
+    localStorage.setItem(MODEL_KEY, v)
+  } catch { /* storage blocked: the choice lasts for this page only */ }
 }

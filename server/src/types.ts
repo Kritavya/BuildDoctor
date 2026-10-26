@@ -50,6 +50,7 @@ export interface RunConfig {
     existingSecurityGroupId?: string;
   };
   maxFixAttempts?: number;      // doctor loop retries, default 3
+  llm?: 'local' | 'groq';       // model that plans and writes Dockerfiles; default from the server's LLM_PROVIDER
 }
 
 // Runtime-config change the doctor loop may apply before a retry. Whitelisted: only the container
@@ -171,6 +172,7 @@ export type RunEvent =
       type: 'llm'; id: string; node: NodeId; service?: string; label: string; phase: 'start' | 'delta' | 'end';
       text?: string; ok?: boolean; ms?: number; tokens?: number; // delta: new text, tokens/ms so far; end: totals
       thinking?: string; // delta only: reasoning text from reasoning models, shown live, never part of the answer
+      model?: string;    // start only: "groq · openai/gpt-oss-120b" or "local · qwen2.5-coder:7b"
     }
   | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; services?: Record<string, ServiceOutput>; diagnosis?: Diagnosis };
 

@@ -19,6 +19,8 @@ export interface FormState {
   existingInstanceId: string
   existingSecurityGroupId: string
   maxFixAttempts: number
+  /** Which model plans and writes Dockerfiles. */
+  llm: 'local' | 'groq'
 }
 
 let envSeq = 0
@@ -47,6 +49,7 @@ export function defaultForm(prefill: boolean, scenario?: string): FormState {
     existingInstanceId: '',
     existingSecurityGroupId: '',
     maxFixAttempts: 3,
+    llm: 'local',
   }
 }
 
@@ -77,6 +80,7 @@ export function fromRunConfig(c: RunConfig): FormState {
     existingInstanceId: c.aws.existingInstanceId ?? '',
     existingSecurityGroupId: c.aws.existingSecurityGroupId ?? '',
     maxFixAttempts: c.maxFixAttempts ?? 3,
+    llm: c.llm ?? 'local',
   }
 }
 
@@ -105,6 +109,7 @@ export function toRunConfig(f: FormState): RunConfig {
       existingSecurityGroupId: f.existingSecurityGroupId.trim() || undefined,
     },
     maxFixAttempts: f.maxFixAttempts,
+    llm: f.llm,
   }
 }
 

@@ -8,6 +8,8 @@ export interface LocalHealth {
   awsAccount?: string
   /** Probe of the deploy policy; missing lists denied actions. */
   awsPermissions?: { ok: boolean; missing: string[] }
+  /** Model providers: the server default, and Groq when a key is configured. */
+  llm?: { default: 'local' | 'groq'; groq?: { ready: boolean; model: string } }
 }
 
 export interface Backend {

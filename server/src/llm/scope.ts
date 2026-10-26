@@ -7,6 +7,7 @@ export interface LlmScope {
   runId: string;
   node: NodeId;
   service?: string;
+  provider?: 'ollama' | 'groq'; // the run's model choice; unset = server default
   emit: (e: RunEvent) => void;
 }
 
