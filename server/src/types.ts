@@ -170,6 +170,7 @@ export type RunEvent =
   | {
       type: 'llm'; id: string; node: NodeId; service?: string; label: string; phase: 'start' | 'delta' | 'end';
       text?: string; ok?: boolean; ms?: number; tokens?: number; // delta: new text, tokens/ms so far; end: totals
+      thinking?: string; // delta only: reasoning text from reasoning models, shown live, never part of the answer
     }
   | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; services?: Record<string, ServiceOutput>; diagnosis?: Diagnosis };
 

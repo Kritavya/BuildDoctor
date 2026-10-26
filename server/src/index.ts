@@ -5,7 +5,7 @@ import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import { approvalPlan, awsSteps, setDashboard, teardown } from './aws/steps.js';
-import { MODEL, ollamaReady } from './llm/ollama.js';
+import { MODEL, PROVIDER, ollamaReady } from './llm/ollama.js';
 import { Engine, WORKSPACES } from './pipeline/engine.js';
 import path from 'node:path';
 import { RunStore } from './pipeline/store.js';
@@ -115,7 +115,7 @@ export function createApp(
       callerAccount(),
     ]);
     const awsPermissions = awsAccount ? await deployPermissions() : undefined;
-    res.json({ docker: dockerOk, ollama, model: MODEL, awsAccount, awsPermissions });
+    res.json({ docker: dockerOk, ollama, provider: PROVIDER, model: MODEL, awsAccount, awsPermissions });
   });
 
   return app;
