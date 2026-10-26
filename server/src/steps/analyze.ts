@@ -219,7 +219,7 @@ async function fillGaps(dir: string, det: Detection, signal: AbortSignal): Promi
         content: `Already detected: ${JSON.stringify(det.analysis)}\nMissing: ${det.gaps.join(', ')}\n\nFiles:\n${files.join('\n')}\n\n${manifests.join('\n\n')}`,
       },
     ],
-    { signal },
+    { signal, label: 'Filling analysis gaps' },
   );
   const out: Partial<AnalysisResult> = {};
   if (det.gaps.includes('runtime') && ['node', 'python', 'go'].includes(res.runtime ?? '')) out.runtime = res.runtime as AnalysisResult['runtime'];

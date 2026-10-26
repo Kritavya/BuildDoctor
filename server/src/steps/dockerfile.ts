@@ -192,7 +192,7 @@ async function generate(ctx: StepContext, c: Context): Promise<{ dockerfile: str
   ];
   for (let i = 0; i < 3; i++) {
     try {
-      const raw = await chat(messages, { signal: ctx.signal, numCtx: 12288, temperature: i === 0 ? 0.2 : 0.4 });
+      const raw = await chat(messages, { signal: ctx.signal, numCtx: 12288, temperature: i === 0 ? 0.2 : 0.4, label: 'Writing Dockerfile', service: c.svc.name });
       const df = ensureNonRoot(stripFences(raw));
       const problems = validateForService(df, c.svc, c.files);
       if (!problems.length) return { dockerfile: df, source: 'llm' };
@@ -230,7 +230,7 @@ async function review(ctx: StepContext, c: Context, current: string): Promise<Re
         },
         { role: 'user', content: `Service:\n${describe(c)}\n\nExisting Dockerfile:\n${current}` },
       ],
-      { signal: ctx.signal, numCtx: 12288 },
+      { signal: ctx.signal, numCtx: 12288, label: 'Reviewing Dockerfile', service: c.svc.name },
     );
     const issues = Array.isArray(r.issues) ? r.issues.filter((i) => i && typeof i.message === 'string').map((i) => ({ severity: i.severity === 'error' ? 'error' as const : 'warning' as const, message: i.message })) : [];
     const opt = typeof r.optimizedDockerfile === 'string' && r.optimizedDockerfile.trim() ? stripFences(r.optimizedDockerfile) : undefined;
@@ -269,7 +269,7 @@ async function fix(ctx: StepContext, c: Context, current: string, failure: Failu
   for (let i = 0; i < 3; i++) {
     let df: string;
     try {
-      df = ensureNonRoot(stripFences(await chat(messages, { signal: ctx.signal, numCtx: 12288, temperature: i === 0 ? 0.2 : 0.5 })));
+      df = ensureNonRoot(stripFences(await chat(messages, { signal: ctx.signal, numCtx: 12288, temperature: i === 0 ? 0.2 : 0.5, label: 'Fixing Dockerfile', service: c.svc.name })));
     } catch (err) {
       if (ctx.signal.aborted) throw err;
       ctx.log(`model unavailable: ${err instanceof Error ? err.message : err}`);

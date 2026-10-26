@@ -125,7 +125,7 @@ export async function diagnose(
             `Failure log (last lines):\n${safeLog}`,
         },
       ],
-      { signal },
+      { signal, label: `Diagnosing ${stage} failure`, service: service?.plan.name },
     );
     return {
       rootCause: str(d.rootCause) || `${stage} failed`,

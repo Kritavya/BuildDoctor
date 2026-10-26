@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PIPELINE, type ApprovalRequest, type ConfigPatch, type Diagnosis, type NodeId, type RunState } from '../types.js';
+import { llmScope } from '../llm/scope.js';
 import type { Step, StepContext } from './step.js';
 import type { RunStore } from './store.js';
 
@@ -140,7 +141,8 @@ export class Engine {
 
       let result;
       try {
-        result = await step.run(ctx);
+        // Model calls made inside the step are attributed to this run and node.
+        result = await llmScope.run({ runId: run.id, node, emit }, () => step.run(ctx));
       } catch (err) {
         result = { ok: false as const, summary: `${node} crashed`, error: errMsg(err) };
       }

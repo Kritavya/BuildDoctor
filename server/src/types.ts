@@ -165,6 +165,12 @@ export type RunEvent =
   | { type: 'service'; node: NodeId; service: string; status: NodeStatus; summary?: string }
   | { type: 'retry'; from: NodeId; to: NodeId; attempt: number; diagnosis: Diagnosis; patch?: ConfigPatch; service?: string }
   | { type: 'approval'; request: ApprovalRequest }           // pipeline pauses at 'approve'
+  // Local model output. History keeps start/end only (end has the full text, capped ~12KB);
+  // deltas are batched (~70ms) and sent to live subscribers only. Prompts are never sent.
+  | {
+      type: 'llm'; id: string; node: NodeId; service?: string; label: string; phase: 'start' | 'delta' | 'end';
+      text?: string; ok?: boolean; ms?: number; tokens?: number; // delta: new text, tokens/ms so far; end: totals
+    }
   | { type: 'done'; status: 'live' | 'failed'; appUrl?: string; services?: Record<string, ServiceOutput>; diagnosis?: Diagnosis };
 
 export interface RunState {

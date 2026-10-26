@@ -97,9 +97,11 @@ export class RunStore {
   }
 
   // Records the event, mirrors node/log/output events into RunState, and fans out to subscribers.
+  // Model deltas are broadcast only: never in history, the run file or replays.
   emit(id: string, e: RunEvent): void {
     const run = this.runs.get(id);
     if (!run) return;
+    if (e.type === 'llm' && e.phase === 'delta') return this.broadcast(id, e);
     if (e.type === 'node') {
       const n = run.nodes[e.node];
       n.status = e.status;
@@ -118,6 +120,11 @@ export class RunStore {
     this.history.get(id)!.push(e);
     this.touch(id);
     if (e.type === 'done') this.flush();
+    this.broadcast(id, e);
+  }
+
+  // Live subscribers only.
+  broadcast(id: string, e: RunEvent): void {
     for (const l of this.listeners.get(id) ?? []) {
       try {
         l(e);

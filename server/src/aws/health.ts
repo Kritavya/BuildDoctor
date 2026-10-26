@@ -138,7 +138,7 @@ async function diagnoseService(
 
   let diagnosis: LlmDiagnosis;
   try {
-    diagnosis = await chatJson<LlmDiagnosis>([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { signal: ctx.signal });
+    diagnosis = await chatJson<LlmDiagnosis>([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { signal: ctx.signal, label: 'Diagnosing health check', service: multi ? svc.name : undefined });
   } catch (e) {
     diagnosis = {
       rootCause: `${multi ? `${svc.name}: ` : ''}Application not reachable on port ${port} (${detail})`,

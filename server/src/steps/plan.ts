@@ -500,7 +500,7 @@ export async function planServices(inv: Inventory, opts: { signal?: AbortSignal;
   for (let i = 0; i < max; i++) {
     let raw: RawPlan;
     try {
-      raw = await chatJson<RawPlan>(messages, { signal: opts.signal, numCtx: 16384, temperature: i === 0 ? 0.1 : 0.3 });
+      raw = await chatJson<RawPlan>(messages, { signal: opts.signal, numCtx: 16384, temperature: i === 0 ? 0.1 : 0.3, label: i ? `Planning services · attempt ${i + 1}` : 'Planning services' });
     } catch (err) {
       if (opts.signal?.aborted) throw err;
       log(`model unavailable for planning: ${err instanceof Error ? err.message : err}`);
