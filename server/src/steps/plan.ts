@@ -162,6 +162,19 @@ export function scriptRefs(inv: Inventory, cmd: string, dir: string): { problems
 
 export const scriptProblems = (inv: Inventory, cmd: string, dir: string) => scriptRefs(inv, cmd, dir).problems;
 
+// Monorepos often orchestrate builds with scripts in the build context's package.json (usually the repo root),
+// e.g. "build:types". A "<pm> run X" that is not a script of the service package but is one of the context
+// package is rewritten to run there, so it validates and the Dockerfile runs it from the right directory.
+export function liftContextScripts(inv: Inventory, cmd: string | undefined, root: string, context: string): string | undefined {
+  if (!cmd || root === context) return cmd;
+  const own = inv.packages.find((p) => p.dir === root)?.scripts ?? {};
+  const ctx = inv.packages.find((p) => p.dir === context)?.scripts ?? {};
+  const up = path.posix.relative(root, context) || '.';
+  const flag: Record<string, string> = { npm: '--prefix', pnpm: '--dir', yarn: '--cwd' };
+  return cmd.replace(/\b(npm|pnpm|yarn) run ([\w:.-]+)/g, (m, pm: string, script: string) =>
+    !(script in own) && script in ctx ? `${pm} ${flag[pm]} ${up} run ${script}` : m);
+}
+
 // Everything a command ends up running: its own text plus the scripts it calls (and in which package), a few levels deep.
 function expand(inv: Inventory, cmd: string, dir: string, depth = 3): { texts: string[]; pkgs: Set<string> } {
   const out = { texts: [cmd], pkgs: new Set<string>() };
@@ -364,13 +377,11 @@ export function checkService(inv: Inventory, raw: RawService, all: RawService[])
   let context = norm(str(raw.context) ?? root);
   if (!dirExists(inv, context)) problems.push(`${label}: context "${context}" does not exist`);
   else if (!inDir(root, context)) problems.push(`${label}: root "${root}" is not inside context "${context}"`);
-  if (pkg && pkg.workspaceDeps.length && context !== '.') {
-    problems.push(`${label}: it depends on repo packages (${pkg.workspaceDeps.join(', ')}), so the context must be "." for them to be part of the build`);
-    context = '.';
-  }
+  // Derivable from the manifests, so corrected here instead of sent back to the model.
+  if (pkg && pkg.workspaceDeps.length && context !== '.') context = '.';
   const install = str(raw.installCommand);
-  const build = str(raw.buildCommand);
-  const start = kind === 'server' ? str(raw.startCommand) : undefined;
+  const build = liftContextScripts(inv, str(raw.buildCommand), root, context);
+  const start = kind === 'server' ? liftContextScripts(inv, str(raw.startCommand), root, context) : undefined;
   const outputDir = kind === 'static' ? str(raw.outputDir) : undefined;
   if (kind === 'server' && !start) problems.push(`${label}: a server needs a startCommand`);
   if (kind === 'static' && (!build || !outputDir)) problems.push(`${label}: a static service needs buildCommand and outputDir`);

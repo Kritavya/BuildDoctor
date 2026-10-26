@@ -19,3 +19,21 @@ describe('retry feedback keeps earlier problems', () => {
     expect(msg).toContain('Earlier drafts were also rejected for: missing EXPOSE');
   });
 });
+
+import { liftContextScripts } from '../src/steps/plan.js';
+describe('liftContextScripts', () => {
+  const inv = {
+    packages: [
+      { dir: '.', scripts: { 'build:types': 'npm run build --prefix packages/types', 'start:server': 'x' } },
+      { dir: 'packages/server', scripts: { build: 'tsc', start: 'node .' } },
+    ],
+  } as never;
+  it('rewrites a root-only script to run from the context', () => {
+    expect(liftContextScripts(inv, 'npm run build:types && npm run build', 'packages/server', '.'))
+      .toBe('npm --prefix ../.. run build:types && npm run build');
+  });
+  it('leaves the service\'s own scripts and same-dir services alone', () => {
+    expect(liftContextScripts(inv, 'npm run start', 'packages/server', '.')).toBe('npm run start');
+    expect(liftContextScripts(inv, 'npm run build:types', '.', '.')).toBe('npm run build:types');
+  });
+});

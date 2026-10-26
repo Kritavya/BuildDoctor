@@ -56,10 +56,12 @@ describe('service plan validation', () => {
     expect(missing).toEqual([expect.stringMatching(/package apps\/web has server code \(e\d+/)]);
   });
 
-  it('workspace members must build from the repo root; dev servers are rejected when a build exists', () => {
+  it('workspace members are moved to the repo-root context instead of being rejected', () => {
     const plan = good();
     plan.services[0].context = 'apps/api';
-    expect(validatePlan(inv, plan).problems).toEqual(['service "api": it depends on repo packages (@demo/shared), so the context must be "." for them to be part of the build']);
+    const v = validatePlan(inv, plan);
+    expect(v.problems).toEqual([]);
+    expect(v.services.find((x) => x.name === 'api')?.context).toBe('.');
   });
 
   it('accepts a port pinned by the start command or read from an env var', () => {
