@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { CircleCheck, GitBranch, RotateCcw, ShieldCheck, X } from 'lucide-react'
 import { backend, isMock, params } from './api'
 import type { AnalysisResult, DeployOutputs, NodeId, RunEvent } from './contract'
 import { defaultForm, envCount, fromRunConfig, repoLabel, toRunConfig, type FormState } from './form'
 import { NODE_META } from './meta'
+import { llmStore } from './llm'
 import { initialRun, reducer } from './state'
 import type { KnownService } from './components/fields'
 import { Canvas } from './components/Canvas'
 import { Console } from './components/Console'
 import { ApprovalModal, TeardownDialog } from './components/Dialogs'
 import { Inspector, type InspectorTab } from './components/Inspector'
+import { LlmPanel } from './components/LlmPanel'
 import { ResultCard } from './components/ResultCard'
 import { RunForm } from './components/RunForm'
 import { TopBar, type HealthState } from './components/TopBar'
@@ -20,6 +22,7 @@ type Toast = { id: number; tone: 'ok' | 'retry' | 'info'; text: string }
 const urlNode = params.get('node') as NodeId | null
 const urlTab = params.get('tab') as InspectorTab | null
 const autoStart = isMock && params.has('step')
+const LLM_PANEL_W = 352 + 12
 
 export default function App() {
   const [form, setFormState] = useState<FormState>(() => defaultForm(isMock, params.get('scenario') ?? undefined))
@@ -39,6 +42,8 @@ export default function App() {
   const [tearing, setTearing] = useState(false)
   const [created, setCreated] = useState<DeployOutputs['created'] | null | undefined>()
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [llmOpen, setLlmOpen] = useState(false)
+  const writing = useSyncExternalStore(llmStore.subscribe, llmStore.writingNode)
   const unsub = useRef<() => void>(undefined)
   const restoredTornDown = useRef(false)
   const cancelled = useRef(false)
@@ -58,6 +63,7 @@ export default function App() {
   }, [])
 
   const onEvent = useCallback((ev: RunEvent) => {
+    if (ev.type === 'llm') return llmStore.apply(ev)
     dispatch({ kind: 'event', ev })
     // Teardown is not a pipeline event, so a replayed torn-down run would otherwise end at "live".
     if (ev.type === 'done' && restoredTornDown.current) dispatch({ kind: 'tornDown', deleted: [] })
@@ -76,11 +82,13 @@ export default function App() {
   // Follows a run's event stream; the server replays its full history first.
   const follow = useCallback((id: string) => {
     unsub.current?.()
+    llmStore.reset()
     dispatch({ kind: 'started', runId: id })
     rememberRun(id)
     quiet.current = true
     unsub.current = backend.subscribe(id, onEvent, () => {
       quiet.current = true
+      llmStore.reset()
       dispatch({ kind: 'replay' })
       window.setTimeout(() => (quiet.current = false), 1000)
     })
@@ -111,6 +119,7 @@ export default function App() {
   const deploy = useCallback(async (f: FormState) => {
     setStartError(undefined)
     unsub.current?.()
+    llmStore.reset()
     dispatch({ kind: 'starting' })
     cancelled.current = false
     try {
@@ -205,6 +214,7 @@ export default function App() {
 
   const newRun = () => {
     unsub.current?.()
+    llmStore.reset()
     dispatch({ kind: 'reset' })
     setSelected(null)
     setFormOpen(true)
@@ -237,6 +247,7 @@ export default function App() {
           <div className="canvas-wrap">
             <ReactFlowProvider>
               <Canvas run={run} selected={selected} ghost={ghost} onSelect={setSelected}
+                writing={writing} leftInset={llmOpen ? LLM_PANEL_W : 0}
                 layoutKey={`${formOpen}|${consoleOpen}|${run.runId ?? ''}|${run.phase === 'live' || run.phase === 'failed' || run.phase === 'torn-down'}`} />
             </ReactFlowProvider>
 
@@ -255,6 +266,9 @@ export default function App() {
                 <ShieldCheck size={15} /> Review AWS changes
               </button>
             )}
+
+            <LlmPanel model={health.status === 'ok' ? health.data.model : 'qwen2.5-coder:7b'} visible={!ghost}
+              onExpandedChange={setLlmOpen} />
 
             <Inspector node={selected} view={selected ? run.nodes[selected] : undefined} logs={run.logs} services={run.services}
               form={form} set={setForm} phase={run.phase} detectedPort={detectedPort}

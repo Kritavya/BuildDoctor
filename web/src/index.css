@@ -2598,6 +2598,322 @@ button.chip:hover {
   color: var(--ink-2);
 }
 
+/* ---------- local model panel ---------- */
+.llm-panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  bottom: 12px;
+  width: 352px;
+  max-width: calc(100% - 24px);
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-3);
+  overflow: hidden;
+  animation: llm-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes llm-in {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+.llm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.llm-titles {
+  flex: 1;
+  min-width: 0;
+}
+.llm-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+.llm-model {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 450;
+  color: var(--ink-3);
+}
+.llm-label {
+  margin: 1px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.llm-head .icon-btn.is-on {
+  color: var(--brand);
+  background: var(--brand-weak);
+}
+.llm-dot {
+  position: relative;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--skip);
+}
+.llm-dot.is-small {
+  width: 7px;
+  height: 7px;
+}
+.llm-dot.is-done {
+  background: var(--ok);
+}
+.llm-dot.is-failed {
+  background: var(--bad);
+}
+.llm-dot.is-live {
+  background: var(--brand);
+}
+.llm-dot.is-live::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--brand);
+  opacity: 0;
+  animation: llm-ping 1.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+@keyframes llm-ping {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+.llm-body {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 14px 16px;
+  overflow: auto;
+  font: 12px/1.6 var(--mono);
+  color: var(--ink);
+  background: var(--panel-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  outline: none;
+}
+.llm-where {
+  display: block;
+  margin-bottom: 8px;
+  font: 600 10.5px/1.4 var(--font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.llm-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font);
+  color: var(--ink-3);
+}
+.llm-reading {
+  color: var(--ink-3);
+  font-family: var(--font);
+  font-size: 12.5px;
+}
+.llm-caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 1px;
+  vertical-align: -2px;
+  border-radius: 1px;
+  background: var(--brand);
+  animation: llm-blink 1s steps(1) infinite;
+}
+@keyframes llm-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.tk-kw {
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.tk-key {
+  color: var(--run);
+}
+.tk-cm {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.llm-history {
+  flex: none;
+  max-height: 156px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  padding: 8px 6px 6px;
+}
+.llm-history-head {
+  margin: 0 8px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.llm-history ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.llm-hrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.llm-hrow:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.llm-hrow.is-on {
+  background: var(--brand-weak);
+  color: var(--brand-ink);
+}
+.llm-hlabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.llm-hmeta {
+  flex: none;
+  font: 11px var(--mono);
+  color: var(--ink-3);
+}
+.llm-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  font: 11.5px var(--mono);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.llm-foot.is-live {
+  color: var(--brand-ink);
+}
+.llm-foot.is-failed {
+  color: var(--bad);
+}
+.llm-foot-sep {
+  opacity: 0.6;
+}
+.llm-foot-rate {
+  margin-left: auto;
+}
+.llm-pill {
+  position: absolute;
+  left: 52px;
+  bottom: 15px;
+  z-index: 9;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(420px, calc(100% - 300px));
+  height: 32px;
+  padding: 0 13px 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  box-shadow: var(--sh-2);
+  animation: llm-in 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: border-color 0.2s, color 0.2s;
+}
+.llm-pill:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+.llm-pill.is-live {
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--line));
+  color: var(--brand-ink);
+}
+.llm-pill-name {
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.llm-pill-sep {
+  color: var(--ink-3);
+}
+.llm-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.step-writing {
+  position: absolute;
+  top: -10px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-ink);
+  background: var(--brand-weak);
+  border: 1px solid color-mix(in srgb, var(--brand) 35%, transparent);
+  box-shadow: var(--sh-1);
+  animation: pop 0.32s cubic-bezier(0.3, 1.5, 0.6, 1);
+}
+.step-writing::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: llm-blink 1s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .llm-dot.is-live::after {
+    display: none;
+  }
+  .llm-caret,
+  .step-writing::before {
+    animation: none;
+  }
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 1180px) {
   .pill-label {

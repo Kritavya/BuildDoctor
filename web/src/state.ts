@@ -116,6 +116,8 @@ function applyEvent(s: RunUi, ev: RunEvent): RunUi {
     }
     case 'approval':
       return { ...s, phase: 'awaiting-approval', approval: ev.request }
+    case 'llm':
+      return s // streamed into llmStore (see llm.ts)
     case 'done': {
       // Surface the final diagnosis on the step that failed so its panel can show it.
       if (ev.diagnosis) {

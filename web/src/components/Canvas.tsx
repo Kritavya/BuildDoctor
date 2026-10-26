@@ -119,7 +119,7 @@ function computeViewport(l: Layout, w: number, h: number, focus?: NodeId) {
 
 // ---------- nodes ----------
 
-type StepData = { id: NodeId; view: NodeView; ghost: boolean; services: string[] }
+type StepData = { id: NodeId; view: NodeView; ghost: boolean; services: string[]; writing: boolean }
 
 const MAX_CHIPS = 3
 
@@ -163,7 +163,7 @@ function Vitals({ status }: { status: NodeStatus }) {
 }
 
 const StepCard = memo(function StepCard({ data, selected, width }: NodeProps<StepNode>) {
-  const { id, view, ghost, services } = data
+  const { id, view, ghost, services, writing } = data
   const chips = services.length > 1 && PER_SERVICE.includes(id)
   const meta = NODE_META[id]
   const Icon = meta.icon
@@ -179,6 +179,7 @@ const StepCard = memo(function StepCard({ data, selected, width }: NodeProps<Ste
       {isRetryTarget && <Handle type="target" position={Position.Top} id="retry-in" className="h h--hidden" style={{ left: '30%' }} />}
       {isRetrySource && <Handle type="source" position={Position.Top} id="retry-out" className="h h--hidden" style={{ left: '70%' }} />}
 
+      {writing && <span className="step-writing">writing…</span>}
       {attempt && <span className="step-attempt" title={`Attempt ${attempt}`}><RotateCcw size={10} strokeWidth={2.6} />×{attempt}</span>}
       <div className="step-top">
         <span className="step-icon"><Icon size={17} strokeWidth={1.9} /></span>
@@ -261,6 +262,10 @@ interface CanvasProps {
   onSelect: (id: NodeId | null) => void
   /** Changes when the surrounding layout changes on purpose (form toggled, run started...). */
   layoutKey: string
+  /** Step the local model is writing for, if any. */
+  writing?: NodeId
+  /** Screen px covered by the model panel on the left. */
+  leftInset?: number
 }
 
 function useSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -275,7 +280,7 @@ function useSize(ref: React.RefObject<HTMLDivElement | null>) {
   return size
 }
 
-export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProps) {
+export function Canvas({ run, selected, ghost, onSelect, layoutKey, writing, leftInset = 0 }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null)
   const size = useSize(host)
   const rf = useReactFlow()
@@ -291,11 +296,13 @@ export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProp
   const active = PIPELINE.find((id) => run.nodes[id].status === 'running' || run.nodes[id].status === 'waiting')
     ?? [...PIPELINE].reverse().find((id) => run.nodes[id].status === 'failed')
   const focus = selected ?? active
-  const availW = size ? Math.max(240, size.w - (selected ? INSPECTOR_W : 0)) : 0
+  const inset = size && size.w - leftInset - (selected ? INSPECTOR_W : 0) >= 480 ? leftInset : 0
+  const availW = size ? Math.max(240, size.w - (selected ? INSPECTOR_W : 0) - inset) : 0
 
   const fit = (animate = true) => {
     if (!size) return
-    void rf.setViewport(computeViewport(layout, availW, size.h, focus), { duration: animate ? 280 : 0 })
+    const vp = computeViewport(layout, availW, size.h, focus)
+    void rf.setViewport({ ...vp, x: vp.x + inset }, { duration: animate ? 280 : 0 })
   }
   const fitRef = useRef(fit)
   fitRef.current = fit
@@ -315,7 +322,7 @@ export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProp
     if (!size || first.current || userMoved.current) return
     const t = window.setTimeout(() => fitRef.current(), 120)
     return () => window.clearTimeout(t)
-  }, [size, active])
+  }, [size, active, inset])
 
   // Opening the inspector: keep the selected step clear of the panel.
   useEffect(() => {
@@ -323,8 +330,8 @@ export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProp
     if (!userMoved.current) return fitRef.current()
     const vp = rf.getViewport()
     const p = layout.pos[selected]
-    const left = p.x * vp.zoom + vp.x
-    const right = (p.x + layout.nodeW) * vp.zoom + vp.x
+    const left = p.x * vp.zoom + vp.x - inset
+    const right = (p.x + layout.nodeW) * vp.zoom + vp.x - inset
     let dx = 0
     if (right > availW - EDGE) dx = availW - EDGE - right
     if (left + dx < EDGE) dx = EDGE - left
@@ -338,11 +345,11 @@ export function Canvas({ run, selected, ghost, onSelect, layoutKey }: CanvasProp
     ...layout.stages,
     ...PIPELINE.map<StepNode>((id) => ({
       id, type: 'step', position: layout.pos[id], width: layout.nodeW, height: H,
-      data: { id, view: run.nodes[id], ghost, services: names },
+      data: { id, view: run.nodes[id], ghost, services: names, writing: writing === id },
       selected: selected === id, draggable: false, connectable: false,
     })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [run.nodes, selected, ghost, layout, namesKey])
+  ], [run.nodes, selected, ghost, layout, namesKey, writing])
 
   const edges = useMemo<Array<FlowEdgeT | RetryEdgeT>>(() => {
     const flow: FlowEdgeT[] = PIPELINE.slice(0, -1).map((from, i) => {
