@@ -190,14 +190,16 @@ async function generate(ctx: StepContext, c: Context): Promise<{ dockerfile: str
     { role: 'system', content: `You write production Dockerfiles.\n${RULES}` },
     { role: 'user', content: `Write a Dockerfile for this service.\n${describe(c)}` },
   ];
+  const seen: string[] = [];
   for (let i = 0; i < 3; i++) {
     try {
-      const raw = await chat(messages, { signal: ctx.signal, numCtx: 12288, temperature: i === 0 ? 0.2 : 0.4, label: 'Writing Dockerfile', service: c.svc.name });
+      const raw = await chat(messages, { signal: ctx.signal, numCtx: 12288, temperature: 0.2, label: 'Writing Dockerfile', service: c.svc.name });
       const df = ensureNonRoot(stripFences(raw));
       const problems = validateForService(df, c.svc, c.files);
       if (!problems.length) return { dockerfile: df, source: 'llm' };
       ctx.log(`[${c.svc.name}] model Dockerfile rejected: ${problems.join('; ')}`);
-      messages.push({ role: 'assistant', content: df }, { role: 'user', content: `That Dockerfile is not acceptable: ${problems.join('; ')}. Return a corrected complete Dockerfile only.` });
+      seen.push(...problems);
+      messages.push({ role: 'assistant', content: df }, { role: 'user', content: dockerfileFeedback(problems, seen) });
     } catch (err) {
       if (ctx.signal.aborted) throw err;
       ctx.log(`model unavailable: ${err instanceof Error ? err.message : err}`);
@@ -266,6 +268,7 @@ async function fix(ctx: StepContext, c: Context, current: string, failure: Failu
     { role: 'system', content: `You fix broken Dockerfiles.\n${RULES}` },
     { role: 'user', content: prompt },
   ];
+  const seen: string[] = [];
   for (let i = 0; i < 3; i++) {
     let df: string;
     try {
@@ -280,7 +283,8 @@ async function fix(ctx: StepContext, c: Context, current: string, failure: Failu
     if (df.trim() === current.trim()) problems.push('it is identical to the failing Dockerfile, so it would fail the same way');
     if (!problems.length) return df;
     ctx.log(`[${c.svc.name}] model fix rejected: ${problems.join('; ')}`);
-    messages.push({ role: 'assistant', content: df }, { role: 'user', content: `That Dockerfile is not acceptable: ${problems.join('; ')}. Return a corrected complete Dockerfile only.` });
+    seen.push(...problems);
+    messages.push({ role: 'assistant', content: df }, { role: 'user', content: dockerfileFeedback(problems, seen) });
   }
   return undefined;
 }
@@ -409,4 +413,14 @@ export const dockerfile: Step = {
 
 function summary(services: Record<string, ServiceRun>): Record<string, { mode?: string }> {
   return Object.fromEntries(Object.entries(services).map(([k, v]) => [k, { mode: v.dockerfileMode }]));
+}
+
+// Current problems plus earlier ones still to avoid, so each retry does not trade one mistake for another.
+export function dockerfileFeedback(current: string[], seen: string[]): string {
+  const earlier = [...new Set(seen)].filter((p) => !current.includes(p));
+  return [
+    `That Dockerfile is not acceptable: ${current.join('; ')}.`,
+    earlier.length ? `Earlier drafts were also rejected for: ${earlier.join('; ')}. Do not repeat those.` : '',
+    'Return a corrected complete Dockerfile only.',
+  ].filter(Boolean).join(' ');
 }

@@ -500,7 +500,7 @@ export async function planServices(inv: Inventory, opts: { signal?: AbortSignal;
   for (let i = 0; i < max; i++) {
     let raw: RawPlan;
     try {
-      raw = await chatJson<RawPlan>(messages, { signal: opts.signal, numCtx: 16384, temperature: i === 0 ? 0.1 : 0.3, label: i ? `Planning services · attempt ${i + 1}` : 'Planning services' });
+      raw = await chatJson<RawPlan>(messages, { signal: opts.signal, numCtx: 16384, temperature: 0.1, label: i ? `Planning services · attempt ${i + 1}` : 'Planning services' });
     } catch (err) {
       if (opts.signal?.aborted) throw err;
       log(`model unavailable for planning: ${err instanceof Error ? err.message : err}`);
@@ -513,13 +513,20 @@ export async function planServices(inv: Inventory, opts: { signal?: AbortSignal;
     rejected.push(v.problems);
     log(`plan attempt ${i + 1} rejected: ${v.problems.join('; ')}`);
     if (v.valid.length && (!best || v.valid.length >= best.valid.length)) best = { valid: v.valid, skipped: raw.skipped };
-    messages.push(
-      { role: 'assistant', content: JSON.stringify(raw) },
-      { role: 'user', content: `That plan does not match the repository:\n- ${v.problems.join('\n- ')}\nFix these problems using only the inventory and return the complete JSON plan again.` },
-    );
+    messages.push({ role: 'assistant', content: JSON.stringify(raw) }, { role: 'user', content: planFeedback(v.problems, rejected) });
   }
   if (best) return { services: finalize(inv, best.valid), skipped: cleanSkipped({ skipped: best.skipped }), source: 'salvaged', attempts: rejected.length, rejected };
   return { services: [], skipped: [], source: 'fallback', attempts: rejected.length, rejected };
+}
+
+// Lists the current problems plus every earlier one as standing constraints, so a fix for one
+// problem does not bring back another (small models otherwise oscillate between two mistakes).
+export function planFeedback(current: string[], history: string[][]): string {
+  const earlier = [...new Set(history.slice(0, -1).flat())].filter((p) => !current.includes(p));
+  const parts = [`That plan does not match the repository:\n- ${current.join('\n- ')}`];
+  if (earlier.length) parts.push(`Earlier attempts were also rejected for these; the new plan must not repeat any of them:\n- ${earlier.join('\n- ')}`);
+  parts.push('Fix every problem listed above at once, using only the inventory, and return the complete JSON plan again.');
+  return parts.join('\n\n');
 }
 
 function cleanSkipped(raw: RawPlan): PlanResult['skipped'] {
