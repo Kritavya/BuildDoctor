@@ -20,6 +20,11 @@ export interface ChatOptions {
 
 const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434';
 export const MODEL = process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b';
+// Reasoning models (qwen3, ...): OLLAMA_THINK=false turns their thinking trace off; unset leaves the request unchanged.
+const THINK = process.env.OLLAMA_THINK === undefined ? undefined : process.env.OLLAMA_THINK === 'true';
+
+// Drops a <think>...</think> block if a model emits one inline, so it never reaches a Dockerfile or a plan.
+export const stripThinking = (t: string) => t.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trimStart();
 
 export const DELTA_MS = 70;
 export const END_TEXT_MAX = 12_000;
@@ -44,6 +49,7 @@ export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Pro
         model: MODEL,
         messages,
         stream: true,
+        think: THINK,
         format: opts.json ? 'json' : undefined,
         options: { temperature: opts.temperature ?? 0.2, num_ctx: opts.numCtx ?? 8192 },
       }),
@@ -53,8 +59,9 @@ export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Pro
       text += chunk;
       call?.delta(chunk);
     });
-    call?.end(true, out.text, out.tokens);
-    return out.text;
+    const answer = stripThinking(out.text);
+    call?.end(true, answer, out.tokens);
+    return answer;
   } catch (err) {
     call?.end(false, text);
     throw err;
