@@ -8,6 +8,7 @@
 //   &play=1                 with step: keep playing after the fast-forward
 //   &speed=2                playback speed multiplier
 //   &scenario=monorepo      two services (web + api) with a retry on the api build and two live URLs
+//   &step=stream|streamdone the first Dockerfile mid-stream / just finished in the local model panel
 import type { Backend, LocalHealth } from './api'
 import type { ApprovalService, DeployOutputs, Diagnosis, NodeId, NodeStatus, RunConfig, RunEvent, RunState } from './contract'
 
@@ -66,6 +67,25 @@ export function repoSlug(repoUrl: string): string {
   return (s || 'app').slice(0, 200)
 }
 
+// Simulated local model call: start, ~70ms deltas of a few tokens each, then end with the full text.
+let callSeq = 0
+function modelCall(out: Entry[], node: NodeId, label: string, text: string, opts: { service?: string; think?: number; perDelta?: number } = {}) {
+  const id = `mock${++callSeq}`
+  const base = { type: 'llm' as const, id, node, label: opts.service ? `${label} · ${opts.service}` : label, ...(opts.service ? { service: opts.service } : {}) }
+  const tokens = text.match(/\s+|\w{1,4}|[^\w\s]/g) ?? []
+  const per = opts.perDelta ?? 3
+  const think = opts.think ?? 600
+  out.push({ d: 150, ev: { ...base, phase: 'start' } })
+  let ms = think
+  for (let i = 0; i < tokens.length; i += per) {
+    ms += 70
+    out.push({ d: i ? 70 : think, ev: { ...base, phase: 'delta', text: tokens.slice(i, i + per).join(''), tokens: Math.min(i + per, tokens.length), ms } })
+  }
+  out.push({ d: 60, ev: { ...base, phase: 'end', ok: true, text, tokens: tokens.length, ms: ms + 60 } })
+}
+
+const json = (v: unknown) => JSON.stringify(v, null, 2)
+
 function script(cfg: RunConfig, runId: string): Entry[] {
   const repo = cfg.repoUrl.replace(/^https?:\/\/(www\.)?github\.com\//, '').replace(/\.git$/, '') || 'acme/notes-api'
   const ecrRepo = `builddoctor/${repoSlug(cfg.repoUrl)}`
@@ -96,6 +116,10 @@ function script(cfg: RunConfig, runId: string): Entry[] {
   log(300, 'analyze', 'Found package.json, package-lock.json')
   log(300, 'analyze', 'Runtime: node 20 (engines field)')
   log(250, 'analyze', 'Framework: express 4.19, entry src/server.js')
+  modelCall(out, 'analyze', 'Planning services', json({
+    services: [{ name: 'app', root: '.', context: '.', kind: 'server', runtime: 'node', framework: 'express', runtimeImage: 'node:20-alpine', installCommand: 'npm ci', startCommand: 'node src/server.js', port, portEvidence: `src/server.js:12 app.listen(process.env.PORT || ${port})` }],
+    skipped: [],
+  }), { perDelta: 4 })
   log(250, 'analyze', `Port ${port} from app.listen(process.env.PORT || ${port})`)
   log(200, 'analyze', 'Env vars referenced: DATABASE_URL, JWT_SECRET')
   log(200, 'analyze', 'WARN No Dockerfile in repository')
@@ -112,6 +136,7 @@ function script(cfg: RunConfig, runId: string): Entry[] {
 
   node(250, 'dockerfile', 'running', 'Local model drafting a Dockerfile', 1)
   log(400, 'dockerfile', 'Prompting qwen2.5-coder:7b with project facts (secret values withheld)')
+  modelCall(out, 'dockerfile', 'Writing Dockerfile', DOCKERFILE_V1, { service: 'app' })
   log(1100, 'dockerfile', 'Draft received: 12 lines, base image node:20-alpine')
   output(100, 'dockerfile', DOCKERFILE_V1)
   node(150, 'dockerfile', 'success', 'Dockerfile generated (model)', 1)
@@ -132,9 +157,11 @@ function script(cfg: RunConfig, runId: string): Entry[] {
   node(200, 'build', 'failed', 'Build failed: npm ERR! Missing script: "build"', 1)
 
   log(500, 'build', 'Doctor: reading the failing step and package.json scripts')
+  modelCall(out, 'build', 'Diagnosing build failure', json({ rootCause: BUILD_DIAGNOSIS.rootCause, evidence: BUILD_DIAGNOSIS.evidence, attemptedFix: BUILD_DIAGNOSIS.attemptedFix, nextStep: BUILD_DIAGNOSIS.nextStep }), { service: 'app', perDelta: 4 })
   out.push({ d: 900, ev: { type: 'retry', from: 'build', to: 'dockerfile', attempt: 2, diagnosis: BUILD_DIAGNOSIS } })
 
   node(300, 'dockerfile', 'running', 'Applying the fix', 2)
+  modelCall(out, 'dockerfile', 'Fixing Dockerfile', DOCKERFILE_V2, { service: 'app' })
   log(900, 'dockerfile', 'Removed "RUN npm run build"; switched to npm ci --omit=dev')
   output(100, 'dockerfile', DOCKERFILE_V2)
   node(150, 'dockerfile', 'success', 'Dockerfile rewritten (fix attempt 2)', 2)
@@ -308,6 +335,10 @@ function monorepoScript(cfg: RunConfig, runId: string): Entry[] {
   node(250, 'analyze', 'running', 'Building the repo inventory')
   log(300, 'analyze', 'npm workspaces: apps/*, packages/*')
   log(300, 'analyze', 'Asking the local model for a service plan (attempt 1 of 4)')
+  modelCall(out, 'analyze', 'Planning services', json({
+    services: MONO_SERVICES.map((s) => ({ name: s.name, root: s.root, kind: s.kind, framework: s.framework, installCommand: s.installCommand, startCommand: s.startCommand, port: s.port, portEvidence: s.portEvidence })),
+    skipped: [{ dir: 'packages/db', reason: 'library used by api' }, { dir: 'packages/ui', reason: 'library used by web' }],
+  }), { perDelta: 5 })
   for (const s of MONO_SERVICES) {
     log(250, 'analyze', `service ${s.name}: ${s.kind} at ${s.root} (context .) · port ${s.port} [${s.portEvidence}] · generate ${s.dockerfile}`)
   }
@@ -323,10 +354,12 @@ function monorepoScript(cfg: RunConfig, runId: string): Entry[] {
   node(250, 'dockerfile', 'running', 'Local model drafting 2 Dockerfiles', 1)
   svc(50, 'dockerfile', 'web', 'running')
   log(500, 'dockerfile', '[web] no Dockerfile — generating apps/web/Dockerfile')
+  modelCall(out, 'dockerfile', 'Writing Dockerfile', WEB_DOCKERFILE, { service: 'web' })
   log(900, 'dockerfile', '[web] draft accepted: 2 stages, node:20-slim')
   svc(50, 'dockerfile', 'web', 'success', 'generated')
   svc(50, 'dockerfile', 'api', 'running')
   log(500, 'dockerfile', '[api] no Dockerfile — generating apps/api/Dockerfile')
+  modelCall(out, 'dockerfile', 'Writing Dockerfile', API_V1, { service: 'api', think: 400 })
   log(800, 'dockerfile', '[api] draft accepted: node:20-slim')
   svc(50, 'dockerfile', 'api', 'success', 'generated')
   output(100, 'dockerfile', {
@@ -359,11 +392,13 @@ function monorepoScript(cfg: RunConfig, runId: string): Entry[] {
   svc(50, 'build', 'api', 'failed', 'npm ERR! 404 @shop/db is not in this registry')
   node(200, 'build', 'failed', '[api] Build failed: npm ERR! 404 @shop/db is not in this registry', 1)
   log(400, 'build', 'diagnosing build failure...')
+  modelCall(out, 'build', 'Diagnosing build failure', json({ rootCause: API_DIAGNOSIS.rootCause, evidence: API_DIAGNOSIS.evidence, attemptedFix: API_DIAGNOSIS.attemptedFix, nextStep: API_DIAGNOSIS.nextStep }), { service: 'api', perDelta: 4 })
   out.push({ d: 900, ev: { type: 'retry', from: 'build', to: 'dockerfile', attempt: 2, diagnosis: API_DIAGNOSIS, service: 'api' } })
 
   node(300, 'dockerfile', 'running', 'Fixing the api Dockerfile', 2)
   svc(50, 'dockerfile', 'api', 'running', 'fixing (attempt 2)')
   log(300, 'dockerfile', '[api] doctor loop attempt 2: build failed — npm tried to download @shop/db from the public registry')
+  modelCall(out, 'dockerfile', 'Fixing Dockerfile', API_V2, { service: 'api' })
   log(900, 'dockerfile', '[api] copy packages/db and install it as a workspace')
   svc(50, 'dockerfile', 'api', 'success', 'rewritten (fix attempt 2)')
   output(100, 'dockerfile', { mode: 'fixed', service: 'api', path: 'apps/api/Dockerfile', dockerfile: API_V2, previous: API_V1, fixing: API_DIAGNOSIS, services: { web: { mode: 'generated' }, api: { mode: 'fixed' } } })
@@ -503,6 +538,11 @@ function resolveStep(step: string, entries: Entry[]): number {
     return at((e) => e.ev.type === 'node' && e.ev.node === 'lint' && e.ev.attempt === 2) + 1
   }
   if (step === 'approval') return at((e) => e.ev.type === 'approval') + 1
+  if (step === 'stream' || step === 'streamdone') {
+    const start = at((e) => e.ev.type === 'llm' && e.ev.phase === 'start' && e.ev.label.startsWith('Writing Dockerfile'))
+    const end = at((e) => e.ev.type === 'llm' && e.ev.phase === 'end' && entries.indexOf(e) > start)
+    return step === 'stream' ? start + Math.round((end - start) * 0.6) : end + 1
+  }
   if (step === 'live') return entries.length
   const n = Number(step)
   return Number.isFinite(n) ? Math.min(Math.max(0, n), entries.length) : 0
